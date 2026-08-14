@@ -1,0 +1,57 @@
+name: Bug report
+description: Something produced a wrong slice, failed to load, or leaked data
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a **masking bypass** — a column that should have been masked
+        reaching the output — please report it privately instead, via
+        [Security Advisories](../../security/advisories/new).
+
+  - type: textarea
+    id: schema
+    attributes:
+      label: Minimal schema that reproduces it
+      description: |
+        This is the most useful thing you can give us. Every bug so far has been
+        a schema shape nobody anticipated — a timestamp in a primary key, a
+        foreign key inherited by a partition, a cycle whose constraints were not
+        DEFERRABLE. A description of the schema is much harder to act on than
+        `CREATE TABLE` statements we can run.
+      render: sql
+      placeholder: |
+        CREATE TABLE users (
+          id bigserial PRIMARY KEY,
+          ...
+        );
+    validations: { required: true }
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: Please redact connection strings.
+      render: shell
+      placeholder: safeslice run --table users --limit 100 --to "postgres://localhost/dev"
+    validations: { required: true }
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations: { required: true }
+
+  - type: textarea
+    id: plan
+    attributes:
+      label: Output of `safeslice plan`
+      description: It reads no data, so it is safe to paste. It usually shows the cause.
+      render: text
+
+  - type: input
+    id: versions
+    attributes:
+      label: safeslice and PostgreSQL versions
+      placeholder: "safeslice v0.1.0, PostgreSQL 16.2"
+    validations: { required: true }

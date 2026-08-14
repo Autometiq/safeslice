@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The catalog queries read pg_catalog directly, and identity columns,
+        # generated columns and partition parentage all moved between releases.
+        # Testing one version proves nothing about the others.
+        postgres: ['13', '14', '15', '16', '17']
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: safeslice
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - run: go build ./...
+      - run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      # A file added without the header is an attribution gap, and the fix is
+      # trivial -- so catch it on the PR rather than at audit time.
+      - name: licence headers
+        # Invoked via bash rather than executed directly: git on Windows does not
+        # track the exec bit, so a contributor there can silently commit mode 644
+        # and break this step with a "Permission denied" that says nothing useful.
+        run: bash ./scripts/addlicense.sh --check
+
+      - name: test
+        env:
+          SAFESLICE_TEST_DSN: postgres://postgres:pw@localhost:5432/safeslice
+        run: go test -race -count=1 ./...
+
+  release-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      # Catch a broken release config on the PR, not on the tag.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --snapshot --clean

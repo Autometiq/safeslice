@@ -1,0 +1,80 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: safeslice
+    main: ./cmd/safeslice
+    binary: safeslice
+    # CGO_ENABLED=0 is the whole distribution story: one file, no runtime, no
+    # libc dependency. The pure-Go SQLite driver exists so this stays true.
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE, NOTICE, safeslice.example.yaml]
+
+# Homebrew. `brews` was hard-deprecated in goreleaser v2.16, so this uses the
+# cask form. The tap repo github.com/Autometiq/homebrew-safeslice must exist and
+# be writable by HOMEBREW_TAP_TOKEN; without both, the release still succeeds but
+# `brew install` 404s -- so create it before tagging.
+homebrew_casks:
+  - name: safeslice
+    repository:
+      owner: Autometiq
+      name: homebrew-safeslice
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://autometiq.com/
+    description: Shrink and mask a production Postgres database for local development.
+    license: Apache-2.0
+    # macOS quarantines binaries downloaded by a cask unless they are signed and
+    # notarised. Without this, the first run dies with "cannot be opened because
+    # the developer cannot be verified" and the user blames the tool.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/safeslice"]
+          end
+
+nfpms:
+  - maintainer: Autometiq <hello@autometiq.com>
+    description: Pull a small, PII-scrubbed, referentially-intact slice of a PostgreSQL database.
+    license: Apache-2.0
+    formats: [deb, rpm, apk]
+
+# dockers_v2 replaces the deprecated `dockers` block. Repository names must be
+# lowercase -- "ghcr.io/Autometiq/..." is rejected outright by the OCI spec, and
+# the owner name here is capitalised.
+dockers_v2:
+  - images:
+      - "ghcr.io/autometiq/safeslice"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    dockerfile: Dockerfile
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:', '^ci:']
+
+release:
+  footer: |
+    ## Install
+
+    ```bash
+    go install github.com/Autometiq/safeslice/cmd/safeslice@{{ .Tag }}
+    ```
