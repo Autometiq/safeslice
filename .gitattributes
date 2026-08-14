@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+# Shell scripts must keep LF: CRLF makes them fail on Linux CI with an
+# unhelpful "bad interpreter" error.
+*.sh text eol=lf
+*.go text eol=lf
+*.sql text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
