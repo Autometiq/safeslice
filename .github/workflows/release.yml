@@ -26,9 +26,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Referenced by homebrew_casks in .goreleaser.yaml. GITHUB_TOKEN cannot
-          # push to another repository, so publishing the formula needs a PAT with
-          # contents:write on Autometiq/homebrew-safeslice. Without this line
-          # goreleaser fails on the missing template key before publishing
-          # anything at all.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+

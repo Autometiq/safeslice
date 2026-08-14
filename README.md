@@ -36,8 +36,12 @@ One static Go binary. No runtime, no server, no Kubernetes, no control plane.
 
 ## Installation
 
+Download the binary for your platform from [Releases](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency.
+
 ```bash
-brew install autometiq/safeslice/safeslice
+# Linux / macOS, adjust the platform to match your machine
+curl -sSfL https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_linux_amd64.tar.gz | tar xz
+sudo mv safeslice /usr/local/bin/
 ```
 
 <details>
@@ -49,9 +53,16 @@ go install github.com/Autometiq/safeslice/cmd/safeslice@latest
 
 # Docker
 docker run --rm ghcr.io/autometiq/safeslice:latest --help
-```
 
-Or download a static binary for Linux, macOS or Windows from [Releases](https://github.com/Autometiq/safeslice/releases). Debian, RPM and Alpine packages are published alongside them. Nothing else is required — no Go, no Python, no libc dependency.
+# Debian / Ubuntu
+sudo dpkg -i safeslice_amd64.deb
+
+# RHEL / Fedora
+sudo rpm -i safeslice_amd64.rpm
+
+# Alpine
+sudo apk add --allow-untrusted safeslice_amd64.apk
+```
 
 </details>
 
