@@ -36,19 +36,28 @@ One static Go binary. No runtime, no server, no Kubernetes, no control plane.
 
 ## Installation
 
-Download the binary for your platform from [Releases](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency.
+Download the binary for your platform from [Releases](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency. Linux, macOS and Windows, on amd64 and arm64.
+
+**Linux / macOS**
 
 ```bash
-# Linux / macOS, adjust the platform to match your machine
 curl -sSfL https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_linux_amd64.tar.gz | tar xz
 sudo mv safeslice /usr/local/bin/
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_windows_amd64.zip" -OutFile safeslice.zip
+Expand-Archive safeslice.zip -DestinationPath .
+# then move safeslice.exe somewhere on your PATH
 ```
 
 <details>
 <summary>Other methods</summary>
 
 ```bash
-# Go toolchain
+# Go toolchain (any OS)
 go install github.com/Autometiq/safeslice/cmd/safeslice@latest
 
 # Docker
@@ -63,6 +72,8 @@ sudo rpm -i safeslice_amd64.rpm
 # Alpine
 sudo apk add --allow-untrusted safeslice_amd64.apk
 ```
+
+On Windows, `go install` places the binary in `$env:USERPROFILE\goin`.
 
 </details>
 
@@ -210,7 +221,7 @@ MySQL support will land when an issue asks for it. Servers, schedulers and contr
 go test ./...
 ```
 
-Catalog and end-to-end tests require a real PostgreSQL instance and **skip** without one, so a green run on its own does not mean much:
+Catalog and end-to-end tests require a real PostgreSQL instance and **skip** without one, so a green run on its own does not mean much. Docker is the easiest way to get a throwaway one — it is needed only for the test suite, never to *use* safeslice:
 
 ```bash
 docker run -d -e POSTGRES_PASSWORD=pw -p 55432:5432 postgres:17
