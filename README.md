@@ -73,7 +73,7 @@ sudo rpm -i safeslice_amd64.rpm
 sudo apk add --allow-untrusted safeslice_amd64.apk
 ```
 
-On Windows, `go install` places the binary in `$env:USERPROFILE\goin`.
+On Windows, `go install` places the binary in `$env:USERPROFILE\go\bin`.
 
 </details>
 
