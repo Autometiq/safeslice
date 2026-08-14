@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        safeslice is a CLI and intends to stay one. Servers, schedulers and
+        control planes are out of scope — that is the boundary Neosync crossed,
+        and it is why it needed revenue to survive. A wrapper around the CLI is
+        the right home for those.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting?
+      description: The situation, not the solution. Schema shapes and workflows help most.
+    validations: { required: true }
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What are you doing today instead?
+    validations: { required: false }

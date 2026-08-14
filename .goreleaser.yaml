@@ -1,0 +1,68 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: safeslice
+    main: ./cmd/safeslice
+    binary: safeslice
+    # CGO_ENABLED=0 is the whole distribution story: one file, no runtime, no
+    # libc dependency. The pure-Go SQLite driver exists so this stays true.
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE, NOTICE, safeslice.example.yaml]
+
+# Publishes the formula to github.com/Autometiq/homebrew-safeslice, which must
+# exist and be writable by the token in HOMEBREW_TAP_TOKEN. Without both, the
+# release still succeeds but `brew install` will 404 -- so create the tap repo
+# before tagging v0.1.0.
+brews:
+  - repository:
+      owner: Autometiq
+      name: homebrew-safeslice
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    name: safeslice
+    homepage: https://autometiq.com/
+    description: Shrink and mask a production Postgres database for local development.
+    license: Apache-2.0
+    test: |
+      system "#{bin}/safeslice", "--version"
+
+nfpms:
+  - maintainer: Autometiq <hello@autometiq.com>
+    description: Pull a small, PII-scrubbed, referentially-intact slice of a PostgreSQL database.
+    license: Apache-2.0
+    formats: [deb, rpm, apk]
+
+dockers:
+  - image_templates:
+      - "ghcr.io/Autometiq/safeslice:{{ .Version }}"
+      - "ghcr.io/Autometiq/safeslice:latest"
+    dockerfile: Dockerfile
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:', '^ci:']
+
+release:
+  footer: |
+    ## Install
+
+    ```bash
+    go install github.com/Autometiq/safeslice/cmd/safeslice@{{ .Tag }}
+    ```
