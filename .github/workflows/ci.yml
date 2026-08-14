@@ -64,6 +64,6 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: stable }
       # Catch a broken release config on the PR, not on the tag.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           args: release --snapshot --clean
