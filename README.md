@@ -1,32 +1,40 @@
 <div align="center">
 
-# safeslice
+<img src="logo.png" alt="safeslice" width="280" />
 
-**Tired of 500 GB local databases?**
+<br />
 
-Shrink and mask a production Postgres database into a local one — in a single command.
+### 🔒 Shrink & mask production Postgres — in a single command
 
-Engineered and maintained by **[Autometiq](https://autometiq.com/)**
+<br />
 
 [![CI](https://github.com/Autometiq/safeslice/actions/workflows/ci.yml/badge.svg)](https://github.com/Autometiq/safeslice/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/Autometiq/safeslice)](go.mod)
-[![PostgreSQL 13–17](https://img.shields.io/badge/PostgreSQL-13--17-336791?logo=postgresql&logoColor=white)](#development)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-10B981)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Autometiq/safeslice)](https://goreportcard.com/report/github.com/Autometiq/safeslice)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Autometiq/safeslice?style=flat-square&color=00ADD8)](go.mod)
+[![PostgreSQL 13–17](https://img.shields.io/badge/PostgreSQL-13--17-336791?style=flat-square&logo=postgresql&logoColor=white)](#development)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-10B981?style=flat-square)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Autometiq/safeslice?style=flat-square)](https://goreportcard.com/report/github.com/Autometiq/safeslice)
+
+<br />
+
+[Installation](#-installation) · [Quickstart](#-quickstart) · [Commands](#-commands) · [Configuration](#-configuration-reference) · [Contributing](#-development)
 
 </div>
 
----
+<br />
+
+<div align="center">
 
 ```bash
 safeslice run --from "$PROD_URL" --table users --where "id = 4821" --to "$LOCAL_URL"
 ```
 
-One static Go binary. No runtime, no server, no Kubernetes, no control plane.
+**One static Go binary. No runtime, no server, no Kubernetes, no control plane.**
 
----
+</div>
 
-## Why safeslice exists
+<br />
+
+## 🧠 Why safeslice exists
 
 **Every engineering team hits the same wall.** You need realistic data locally to reproduce a bug or test a pipeline. You cannot legally put production data on a laptop, and you physically cannot fit 500 GB on one either. So the team writes seed scripts that generate fake companies linked to fake users — and those scripts never survive contact with real edge cases. Code that passes on 10 synthetic rows breaks on the nulls, the encodings, and the volume of production.
 
@@ -34,9 +42,11 @@ One static Go binary. No runtime, no server, no Kubernetes, no control plane.
 
 **A static binary cannot be shut down.** safeslice has no hosted service, no scheduler, and no database of its own. It reads one Postgres and writes another. It runs on a laptop, in CI, or on a bastion host, and it has no operating costs to fund. That is a deliberate architectural constraint, not an accident of scope — and it is why it will still work in five years.
 
-## Installation
+<br />
 
-Download the binary for your platform from [Releases](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency. Linux, macOS and Windows, on amd64 and arm64.
+## 📦 Installation
+
+Download the binary for your platform from [**Releases**](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency. Linux, macOS and Windows, on amd64 and arm64.
 
 **Linux / macOS**
 
@@ -54,7 +64,7 @@ Expand-Archive safeslice.zip -DestinationPath .
 ```
 
 <details>
-<summary>Other methods</summary>
+<summary>🔽 Other methods</summary>
 
 ```bash
 # Go toolchain (any OS)
@@ -77,7 +87,9 @@ On Windows, `go install` places the binary in `$env:USERPROFILE\go\bin`.
 
 </details>
 
-## Quickstart
+<br />
+
+## 🚀 Quickstart
 
 **1. Generate a config from your live schema.**
 
@@ -141,25 +153,31 @@ safeslice verify --target "postgres://localhost/dev"
 
 Scans for live email addresses, phone numbers, IP addresses and Luhn-valid payment cards, and exits non-zero on any finding. Gate your CI on it, or hand the output to a compliance reviewer.
 
-## What safeslice solves
+<br />
+
+## ✅ What safeslice solves
 
 The easy 80% of database subsetting is a weekend project. These are the cases that break everything else — each one verified by an end-to-end test against real PostgreSQL:
 
-- ✅ **Non-`DEFERRABLE` foreign-key cycles.** `SET CONSTRAINTS ALL DEFERRED` only affects constraints declared `DEFERRABLE`, and Rails and Django do not declare them — so the textbook fix silently does nothing on the two most common schemas in the world. safeslice detects this and breaks the cycle by inserting the closing column as `NULL`, then restoring it once every row exists.
-- ✅ **Polymorphic and virtual keys.** Rails `commentable_type`/`commentable_id` and Django generic relations have no foreign key for anything to discover. Declare them in YAML and they join the graph like any other edge.
-- ✅ **Deterministic masking.** The same input always yields the same fake, so a customer email appearing in three tables masks identically and every join still works. Share the seed and the whole team's snapshots agree.
-- ✅ **Zero-leak verification.** `verify` is a standalone auditor, not a self-report. Its own output is redacted, so the leak report never becomes a second leak.
-- ✅ **Transitive parent closure.** Every selected row drags its referenced rows along, recursively. The slice restores with no orphans — and because foreign keys stay enforced throughout the load, a successful commit is Postgres itself confirming it.
-- ✅ **Identity and generated columns.** `GENERATED ALWAYS AS IDENTITY` gets `OVERRIDING SYSTEM VALUE`. `GENERATED … STORED` is excluded from the column list and recomputed by Postgres from the *masked* values.
-- ✅ **Sequence resynchronisation.** Without `setval`, rows load perfectly and the application's very first insert collides on the primary key. Every owned sequence is advanced past the slice.
-- ✅ **Composite and non-primary keys.** Composite foreign keys keep their column order. Keys pointing at a `UNIQUE` column rather than the primary key resolve correctly.
-- ✅ **Partitioned tables.** A foreign key on a partitioned parent is recorded again on every partition; without normalising to the root, the same rows are collected twice and the load fails on a duplicate key.
-- ✅ **Unique-constraint collisions.** Two distinct emails hashing to one fake would fail the load. Collisions are retried with a salt until the value is free.
-- ✅ **Type fidelity.** A phone number stored as `bigint` gets a numeric fake. A type that cannot be masked safely — PostGIS, arrays, enums — is a hard error, never a silent corruption.
-- ✅ **Bounded memory at any scale.** The key closure spills to a local SQLite file instead of a Go map, so a 500 GB source does not become tens of gigabytes of RSS. A crashed run resumes instead of restarting.
-- ✅ **Production safety.** The source session is opened read-only inside a `REPEATABLE READ` transaction — nothing can be written to it, and every table is read from one consistent snapshot. Loading into the same database you are reading from is refused outright, including when one side says `localhost` and the other `127.0.0.1`.
+| | Feature | Detail |
+|---|---|---|
+| ✅ | **Non-`DEFERRABLE` FK cycles** | `SET CONSTRAINTS ALL DEFERRED` only affects constraints declared `DEFERRABLE`, and Rails and Django do not declare them. safeslice breaks the cycle by inserting the closing column as `NULL`, then restoring it once every row exists. |
+| ✅ | **Polymorphic & virtual keys** | Rails `commentable_type`/`commentable_id` and Django generic relations have no foreign key. Declare them in YAML and they join the graph like any other edge. |
+| ✅ | **Deterministic masking** | The same input always yields the same fake, so a customer email appearing in three tables masks identically and every join still works. |
+| ✅ | **Zero-leak verification** | `verify` is a standalone auditor, not a self-report. Its output is redacted, so the leak report never becomes a second leak. |
+| ✅ | **Transitive parent closure** | Every selected row drags its referenced rows along, recursively. Foreign keys stay enforced throughout the load. |
+| ✅ | **Identity & generated columns** | `GENERATED ALWAYS AS IDENTITY` gets `OVERRIDING SYSTEM VALUE`. Stored columns are recomputed from *masked* values. |
+| ✅ | **Sequence resync** | Without `setval`, the application's very first insert collides on the primary key. Every owned sequence is advanced past the slice. |
+| ✅ | **Composite & non-primary keys** | Composite foreign keys keep column order. Keys pointing at `UNIQUE` rather than the PK resolve correctly. |
+| ✅ | **Partitioned tables** | FK on a partitioned parent is duplicated on every partition; without normalising to the root, the load fails on a duplicate key. |
+| ✅ | **Unique-constraint collisions** | Two distinct emails hashing to one fake would fail the load. Collisions are retried with a salt until the value is free. |
+| ✅ | **Type fidelity** | A phone stored as `bigint` gets a numeric fake. A type that cannot be masked safely is a hard error, never a silent corruption. |
+| ✅ | **Bounded memory** | The key closure spills to a local SQLite file instead of a Go map, so a 500 GB source does not become tens of GBs of RSS. |
+| ✅ | **Production safety** | Source session is read-only inside `REPEATABLE READ`. Loading into the same database you are reading from is refused outright. |
 
-## Configuration reference
+<br />
+
+## 📋 Configuration reference
 
 <details>
 <summary><code>safeslice.yaml</code></summary>
@@ -198,7 +216,9 @@ Rules: `keep` · `redact` · `secret` · `email` · `phone` · `govid` · `first
 
 </details>
 
-## Commands
+<br />
+
+## 🛠 Commands
 
 | Command | Purpose |
 |---|---|
@@ -207,7 +227,9 @@ Rules: `keep` · `redact` · `secret` · `email` · `phone` · `govid` · `first
 | `safeslice run` | Extract, mask in transit, load into a target or write SQL |
 | `safeslice verify` | Audit a database for surviving personal data; non-zero exit on findings |
 
-## Status and scope
+<br />
+
+## 📌 Status and scope
 
 **v0.1 — PostgreSQL 13 through 17**, tested against every version in CI.
 
@@ -215,7 +237,9 @@ Masking is name-based and cannot know what an opaque column holds. Review your c
 
 MySQL support will land when an issue asks for it. Servers, schedulers and control planes will not — that is the boundary that turned Neosync into a company that had to die.
 
-## Development
+<br />
+
+## 🧪 Development
 
 ```bash
 go test ./...
@@ -232,11 +256,13 @@ The end-to-end suite builds a source database seeded with canary values, slices 
 
 Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Found a masking bypass? Please report it privately via [SECURITY.md](SECURITY.md).
 
+<br />
+
 ---
 
-## Enterprise support & consulting
-
 <div align="center">
+
+## 🏢 Enterprise support & consulting
 
 **safeslice is built and maintained by [Autometiq](https://autometiq.com/).**
 
@@ -253,12 +279,16 @@ Autometiq works with engineering and platform teams on:
 | **CI/CD & platform integration** | Ephemeral per-branch databases, automated refresh pipelines, policy-as-code masking gates, and audit evidence your compliance team will actually accept. |
 | **Compliance engineering** | GDPR, HIPAA and SOC 2 reviews of your development data pipeline, with the controls and documentation to back them up. |
 
+<div align="center">
+
 **[Talk to us → autometiq.com](https://autometiq.com/)**
+
+</div>
 
 ---
 
 <div align="center">
 
-Copyright © 2026 [Autometiq](https://autometiq.com/) · Licensed under [Apache 2.0](LICENSE)
+<sub>Copyright © 2026 <a href="https://autometiq.com/">Autometiq</a> · Licensed under <a href="LICENSE">Apache 2.0</a></sub>
 
 </div>
