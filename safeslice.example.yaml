@@ -1,0 +1,15 @@
+version: 1
+source:
+  schemas: [public]
+slice:
+  root: users
+  limit: 8
+  child_depth: 1
+mask:
+  seed: demo-seed
+  strict: true
+  rules:
+    companies.slug: govid
+    comments.body: redact
+    comments.commentable_type: keep
+    order_items.sku: keep
