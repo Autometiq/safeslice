@@ -64,8 +64,18 @@ func Checks() []Check {
 		},
 		{
 			Kind: "phone",
+			// The left boundary is essential. Without it, "00" followed by digits
+			// matches inside any hex-ish token -- including safeslice's own masked
+			// emails, e.g. user_97e00477401de7b4@example.invalid, where 00477401
+			// looks like an international prefix. A scanner that flags its own
+			// output is one nobody keeps in a pipeline.
+			//
+			// Separators are allowed because real numbers are written
+			// "+44 7700 900123", which a contiguous-digit pattern misses entirely.
+			//
 			// +1555 is the reserved fictional range safeslice emits.
-			SQL: `%[1]s ~ '(\+|00)[0-9]{6,}' AND %[1]s !~ '\+1555'`,
+			SQL: `%[1]s ~ '(^|[^[:alnum:]_])(\+|00)[0-9][0-9 ()._-]{5,16}[0-9]'
+			      AND %[1]s !~ '\+1555'`,
 		},
 		{
 			Kind: "ip",
