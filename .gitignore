@@ -1,0 +1,8 @@
+/safeslice
+/safeslice.exe
+/dist/
+/safeslice.yaml
+*.sql.gz
+slice.sql
+*-keys.db
+/.claude/

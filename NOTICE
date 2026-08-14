@@ -1,0 +1,18 @@
+safeslice
+Copyright 2026 Autometiq
+
+This product includes software developed at Autometiq (https://autometiq.com/).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full terms.
+
+---
+
+Third-party dependencies retain their own licences. Run `go mod download` and
+inspect the module cache, or see go.mod, for the current set:
+
+  github.com/jackc/pgx/v5              MIT
+  github.com/spf13/cobra               Apache-2.0
+  github.com/charmbracelet/lipgloss    MIT
+  gopkg.in/yaml.v3                     MIT and Apache-2.0
+  modernc.org/sqlite                   BSD-3-Clause
