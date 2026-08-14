@@ -48,6 +48,7 @@ dockers_v2:
       - "{{ .Version }}"
       - latest
     dockerfile: Dockerfile
+    sbom: false
 
 checksum:
   name_template: checksums.txt
