@@ -31,11 +31,29 @@ import (
 // scripted -- `echo 2 | safeslice` does what you would expect. The presentation
 // is still styled; only the input mechanism is boring on purpose.
 
-// in is the input source, swappable for tests.
-var in io.Reader = os.Stdin
+// One shared reader for the whole process.
+//
+// A bufio.Reader reads ahead. Creating a fresh one per prompt means the first
+// prompt swallows every remaining line into a buffer that is then discarded,
+// and every later prompt sees EOF -- so a piped or scripted run answers the
+// first question and abandons the rest.
+var (
+	in     io.Reader = os.Stdin
+	reader *bufio.Reader
+)
 
 // SetInput redirects prompt input. Used by tests.
-func SetInput(r io.Reader) { in = r }
+func SetInput(r io.Reader) {
+	in = r
+	reader = nil
+}
+
+func stdin() *bufio.Reader {
+	if reader == nil {
+		reader = bufio.NewReader(in)
+	}
+	return reader
+}
 
 // Choice is one selectable option.
 type Choice struct {
@@ -70,7 +88,7 @@ func Menu(title string, choices []Choice) string {
 		valid[strings.ToLower(c.Key)] = true
 	}
 
-	r := bufio.NewReader(in)
+	r := stdin()
 	for {
 		emitf("%s ", tint("›", emerald))
 		text, err := r.ReadString('\n')
@@ -94,7 +112,7 @@ func Ask(question, def string) string {
 	} else {
 		emitf("%s ", question)
 	}
-	r := bufio.NewReader(in)
+	r := stdin()
 	text, err := r.ReadString('\n')
 	got := strings.TrimSpace(text)
 	if got == "" || (err != nil && got == "") {
@@ -107,7 +125,7 @@ func Ask(question, def string) string {
 // this gates writes to a database, so silence must not mean consent.
 func Confirm(question string) bool {
 	emitf("%s %s ", question, tint("[y/N]", slate))
-	r := bufio.NewReader(in)
+	r := stdin()
 	text, _ := r.ReadString('\n')
 	got := strings.ToLower(strings.TrimSpace(text))
 	return got == "y" || got == "yes"

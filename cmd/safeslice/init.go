@@ -54,7 +54,8 @@ holds a passport number.`,
 			if len(schemas) == 0 {
 				schemas = []string{"public"}
 			}
-			return writeInitConfig(cmd.Context(), dsn, out, schemas, root, force)
+			_, err = writeInitConfig(cmd.Context(), dsn, out, schemas, root, force)
+			return err
 		},
 	}
 	f := cmd.Flags()
@@ -67,15 +68,15 @@ holds a passport number.`,
 
 // writeInitConfig introspects the source and writes a starter config. Shared by
 // the `init` command and the guided menu, so both produce the same file.
-func writeInitConfig(ctx context.Context, dsn, out string, schemas []string, root string, force bool) error {
+func writeInitConfig(ctx context.Context, dsn, out string, schemas []string, root string, force bool) ([]string, error) {
 	if _, err := os.Stat(out); err == nil && !force {
-		return ui.HintCmd(fmt.Errorf("%s already exists", out),
+		return nil, ui.HintCmd(fmt.Errorf("%s already exists", out),
 			"Overwrite it, or open it and edit by hand.",
 			"safeslice init --force")
 	}
 	conn, err := connectSource(ctx, dsn)
 	if err != nil {
-		return ui.Hint(err,
+		return nil, ui.Hint(err,
 			"Check the host, port and credentials. A connection string looks like "+
 				"postgres://user:password@host:5432/dbname")
 	}
@@ -83,15 +84,15 @@ func writeInitConfig(ctx context.Context, dsn, out string, schemas []string, roo
 
 	cat, err := catalog.Load(ctx, conn, schemas)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(cat.Tables) == 0 {
-		return ui.Hint(fmt.Errorf("no tables found in schemas %s", strings.Join(schemas, ", ")),
+		return nil, ui.Hint(fmt.Errorf("no tables found in schemas %s", strings.Join(schemas, ", ")),
 			"Pass --schema if your tables live somewhere other than `public`.")
 	}
 	body, detected, review := generate(cat, schemas, root)
 	if err := os.WriteFile(out, []byte(body), 0o600); err != nil {
-		return fmt.Errorf("writing %s: %w", out, err)
+		return nil, fmt.Errorf("writing %s: %w", out, err)
 	}
 
 	ui.Success("wrote %s", out)
@@ -111,7 +112,7 @@ func writeInitConfig(ctx context.Context, dsn, out string, schemas []string, roo
 			ui.NextStep("safeslice plan")
 		}
 	}
-	return nil
+	return review, nil
 }
 
 // generate renders the config by hand rather than through a YAML marshaller,

@@ -146,7 +146,7 @@ func demoFlow(ctx context.Context) error {
 // demoConfig generates a config for the demo and pre-answers the review, since
 // the point here is to show the workflow rather than to teach the YAML.
 func demoConfig(ctx context.Context) (*config.Config, error) {
-	if err := writeInitConfig(ctx, demo.SourceDSN(), config.DefaultPath, []string{"public"}, "", true); err != nil {
+	if _, err := writeInitConfig(ctx, demo.SourceDSN(), config.DefaultPath, []string{"public"}, "", true); err != nil {
 		return nil, err
 	}
 	cfg, err := config.Load(config.DefaultPath)
@@ -169,9 +169,13 @@ func demoConfig(ctx context.Context) (*config.Config, error) {
 
 func maskedColumnsForDemo(cfg *config.Config) int { return len(cfg.Mask.Rules) }
 
-// ownFlow points the same walkthrough at a database the user already has.
+// ownFlow carries a real database through the whole workflow.
+//
+// It stops for one thing only: the columns the classifier could not judge.
+// Running a slice past those unreviewed is how personal data reaches a laptop,
+// so the confirmation is deliberate rather than a formality.
 func ownFlow(ctx context.Context) error {
-	ui.Stage(1, 3, "Connecting")
+	ui.Stage(1, 5, "Connecting")
 	ui.Detail("Use a read replica if you have one. safeslice opens the source")
 	ui.Detail("read-only and never writes to it.")
 
@@ -181,20 +185,65 @@ func ownFlow(ctx context.Context) error {
 			"A connection string looks like postgres://user:password@host:5432/dbname")
 	}
 
-	ui.Stage(2, 3, "Reading the schema")
+	ui.Stage(2, 5, "Reading the schema")
 	ui.Detail("$ safeslice init --from %s", describe(src))
-	if err := writeInitConfig(ctx, src, config.DefaultPath, []string{"public"}, "", true); err != nil {
+	review, err := writeInitConfig(ctx, src, config.DefaultPath, []string{"public"}, "", true)
+	if err != nil {
 		return err
 	}
 
-	ui.Success("wrote %s", config.DefaultPath)
-	ui.Detail("Open it and decide what each flagged column holds before running a slice.")
+	ui.Stage(3, 5, "Reviewing what could not be classified")
+	if len(review) == 0 {
+		ui.Success("every column was classified automatically")
+	} else {
+		ui.Warn("%d columns hold free text and need your decision:", len(review))
+		for _, c := range review {
+			ui.Detail("%s", c)
+		}
+		ui.Detail("")
+		ui.Detail("They are set to `keep`, which passes them through unchanged. Open")
+		ui.Detail("%s and change any that hold personal data to `redact`.", config.DefaultPath)
+		if !ui.Confirm("\nHave you reviewed them?") {
+			ui.Info("stopping here — nothing has been read from your tables")
+			ui.NextStep("$EDITOR %s", config.DefaultPath)
+			ui.NextStep("safeslice run --to \"postgres://localhost/myapp_dev\"")
+			return nil
+		}
+	}
 
-	ui.Stage(3, 3, "Next")
-	ui.Detail("Nothing has been read from your tables yet — only the schema.")
-	ui.NextStep("safeslice plan")
-	ui.Detail("then, once the config looks right:")
-	ui.NextStep(`safeslice run --to "postgres://localhost/myapp_dev"`)
+	cfg, err := config.Load(config.DefaultPath)
+	if err != nil {
+		return err
+	}
+
+	ui.Stage(4, 5, "Choosing a target")
+	ui.Detail("The target needs its schema already created by your own migrations.")
+	ui.Detail("safeslice copies rows, not table definitions.")
+	target := ui.Ask("\nTarget connection string:", "postgres://localhost/myapp_dev")
+	if target == "" {
+		return ui.Hint(fmt.Errorf("no target given"), "Name the local database to load into.")
+	}
+	if err := refuseSameDatabase(src, target); err != nil {
+		return err
+	}
+	cfg.Slice.Limit = ui.AskInt("How many rows from "+cfg.Slice.Root+"?", 1000)
+
+	if !ui.Confirm(fmt.Sprintf("\nLoad a masked slice into %s?", describe(target))) {
+		ui.Info("stopping here — nothing was written")
+		return nil
+	}
+
+	ui.Detail("$ safeslice run --to %s", describe(target))
+	if err := doRun(ctx, cfg, src, target, "", "", 0); err != nil {
+		return err
+	}
+
+	ui.Stage(5, 5, "Proving nothing leaked")
+	ui.Detail("$ safeslice verify --target %s", describe(target))
+	if err := doVerify(ctx, target, 1000, nil); err != nil {
+		return err
+	}
+	showCommands()
 	return nil
 }
 
