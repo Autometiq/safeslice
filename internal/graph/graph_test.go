@@ -194,3 +194,30 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+func TestCycleDoesNotDragDependentTablesForward(t *testing.T) {
+	// users <-> companies is a cycle; orders depends on users but is not part of
+	// it. Breaking the deadlock on the alphabetically-first stuck table picks
+	// "orders", emitting it before the users it references -- and the load then
+	// dies on a foreign-key violation that reads like a bug in the extractor.
+	tables := []catalog.Ref{ref("orders"), ref("users"), ref("companies")}
+	order := TopoOrder(tables, fixture)
+
+	if indexOf(order, "orders") < indexOf(order, "users") {
+		t.Errorf("order = %v: orders precedes the users it references", names(order))
+	}
+	first := order[0].Name
+	if first != "users" && first != "companies" {
+		t.Errorf("deadlock broken on %q, which is not part of the cycle", first)
+	}
+}
+
+func TestDeadlockBreakStaysDeterministic(t *testing.T) {
+	tables := []catalog.Ref{ref("orders"), ref("users"), ref("companies")}
+	want := names(TopoOrder(tables, fixture))
+	for range 5 {
+		if got := names(TopoOrder(tables, fixture)); !equal(got, want) {
+			t.Fatalf("order not deterministic: %v then %v", want, got)
+		}
+	}
+}

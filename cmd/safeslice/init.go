@@ -46,55 +46,15 @@ Columns the heuristics could not judge are written with a REVIEW comment. Read
 them before trusting the output: no name-based heuristic can know that col_7
 holds a passport number.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
 			dsn, err := sourceDSN(from)
 			if err != nil {
 				return err
 			}
-			if _, err := os.Stat(out); err == nil && !force {
-				return fmt.Errorf("%s already exists; pass --force to overwrite it", out)
-			}
-			conn, err := connectSource(ctx, dsn)
-			if err != nil {
-				return err
-			}
-			defer conn.Close(context.Background())
-
 			schemas := flagSchemas
 			if len(schemas) == 0 {
 				schemas = []string{"public"}
 			}
-			cat, err := catalog.Load(ctx, conn, schemas)
-			if err != nil {
-				return err
-			}
-			if len(cat.Tables) == 0 {
-				return fmt.Errorf("no tables found in schemas %s", strings.Join(schemas, ", "))
-			}
-			body, detected, review := generate(cat, schemas, root)
-			if err := os.WriteFile(out, []byte(body), 0o600); err != nil {
-				return fmt.Errorf("writing %s: %w", out, err)
-			}
-
-			ui.Success("wrote %s", out)
-			ui.Mask("%d columns classified automatically", detected)
-			if len(review) > 0 {
-				// Marked `keep` so the config works immediately, but surfaced
-				// loudly: a column nobody read is the one that leaks.
-				ui.Warn("%d columns need review (written as `keep`):", len(review))
-				for _, c := range review {
-					ui.Detail("%s", c)
-				}
-			}
-			if !flagQuiet {
-				if len(review) > 0 {
-					ui.NextStep("$EDITOR %s", out)
-				} else {
-					ui.NextStep("safeslice plan")
-				}
-				ui.Footer()
-			}
-			return nil
+			return writeInitConfig(cmd.Context(), dsn, out, schemas, root, force)
 		},
 	}
 	f := cmd.Flags()
@@ -103,6 +63,55 @@ holds a passport number.`,
 	f.StringVar(&root, "table", "", "root table (default: the most referenced table)")
 	f.BoolVar(&force, "force", false, "overwrite an existing file")
 	return cmd
+}
+
+// writeInitConfig introspects the source and writes a starter config. Shared by
+// the `init` command and the guided menu, so both produce the same file.
+func writeInitConfig(ctx context.Context, dsn, out string, schemas []string, root string, force bool) error {
+	if _, err := os.Stat(out); err == nil && !force {
+		return ui.HintCmd(fmt.Errorf("%s already exists", out),
+			"Overwrite it, or open it and edit by hand.",
+			"safeslice init --force")
+	}
+	conn, err := connectSource(ctx, dsn)
+	if err != nil {
+		return ui.Hint(err,
+			"Check the host, port and credentials. A connection string looks like "+
+				"postgres://user:password@host:5432/dbname")
+	}
+	defer conn.Close(context.Background())
+
+	cat, err := catalog.Load(ctx, conn, schemas)
+	if err != nil {
+		return err
+	}
+	if len(cat.Tables) == 0 {
+		return ui.Hint(fmt.Errorf("no tables found in schemas %s", strings.Join(schemas, ", ")),
+			"Pass --schema if your tables live somewhere other than `public`.")
+	}
+	body, detected, review := generate(cat, schemas, root)
+	if err := os.WriteFile(out, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", out, err)
+	}
+
+	ui.Success("wrote %s", out)
+	ui.Mask("%d columns classified automatically", detected)
+	if len(review) > 0 {
+		// Marked `keep` so the config works immediately, but surfaced loudly: a
+		// column nobody read is the one that leaks.
+		ui.Warn("%d columns need review (written as `keep`):", len(review))
+		for _, c := range review {
+			ui.Detail("%s", c)
+		}
+	}
+	if !flagQuiet {
+		if len(review) > 0 {
+			ui.NextStep("$EDITOR %s", out)
+		} else {
+			ui.NextStep("safeslice plan")
+		}
+	}
+	return nil
 }
 
 // generate renders the config by hand rather than through a YAML marshaller,

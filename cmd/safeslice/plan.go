@@ -216,8 +216,8 @@ func maskedColumns(cat *catalog.Catalog, cfg *config.Config) int {
 	n := 0
 	for _, ref := range cat.Refs() {
 		t, ok := cat.Table(ref)
-		if !ok {
-			continue
+		if !ok || t.Partition {
+			continue // counted once, on the parent
 		}
 		keys := cat.KeyColumns(ref)
 		for _, col := range t.Columns {
@@ -241,7 +241,10 @@ func strictViolations(cat *catalog.Catalog, cfg *config.Config) []string {
 	var out []string
 	for _, ref := range cat.Refs() {
 		t, ok := cat.Table(ref)
-		if !ok || !cfg.StrictFor(ref) {
+		// Partitions inherit their parent's columns and are read through the
+		// parent, so a rule on the parent covers them. Checking them separately
+		// made `init` emit a config that `run` then rejected.
+		if !ok || t.Partition || !cfg.StrictFor(ref) {
 			continue
 		}
 		for _, c := range cl.Unclassified(t, cat.KeyColumns(ref)) {
@@ -259,8 +262,8 @@ func reportMasking(cat *catalog.Catalog, cfg *config.Config, refs []catalog.Ref)
 	var rows [][]string
 	for _, ref := range refs {
 		t, ok := cat.Table(ref)
-		if !ok {
-			continue
+		if !ok || t.Partition {
+			continue // listed once, on the parent
 		}
 		keys := cat.KeyColumns(ref)
 		for _, col := range t.Columns {

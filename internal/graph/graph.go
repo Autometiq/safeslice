@@ -143,6 +143,15 @@ func TopoOrder(tables []catalog.Ref, fks []catalog.FK) []catalog.Ref {
 	}
 	sort.Strings(names)
 
+	// Tables that genuinely participate in a cycle; only these are safe to
+	// break a deadlock on.
+	inCycle := map[string]bool{}
+	for _, group := range Cycles(tables, fks) {
+		for _, r := range group {
+			inCycle[r.String()] = true
+		}
+	}
+
 	done := map[string]bool{}
 	out := make([]catalog.Ref, 0, len(names))
 	for len(out) < len(names) {
@@ -156,12 +165,26 @@ func TopoOrder(tables []catalog.Ref, fks []catalog.FK) []catalog.Ref {
 			}
 		}
 		if len(ready) == 0 {
-			// Everything left is in a cycle. Break it at the first name so the
-			// result stays deterministic across runs.
+			// Deadlock: every remaining table is waiting on another. Break it
+			// inside an actual cycle.
+			//
+			// Picking the first unfinished table by name is not good enough. A
+			// table that merely *depends* on a cycle -- events -> users, where
+			// users <-> organizations -- is also stuck, and choosing it emits
+			// events before the users it references. The loader then fails on a
+			// foreign-key violation that looks nothing like an ordering problem.
 			for _, n := range names {
-				if !done[n] {
+				if !done[n] && inCycle[n] {
 					ready = []string{n}
 					break
+				}
+			}
+			if len(ready) == 0 {
+				for _, n := range names {
+					if !done[n] {
+						ready = []string{n}
+						break
+					}
 				}
 			}
 		}

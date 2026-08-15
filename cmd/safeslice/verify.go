@@ -42,51 +42,12 @@ card numbers.
 It exits non-zero when it finds anything, so it can gate a CI job or serve as
 evidence for a compliance review.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
 			if target == "" {
-				return fmt.Errorf("no database given: pass --target")
+				return ui.HintCmd(fmt.Errorf("no database given"),
+					"Point it at the database you loaded the slice into.",
+					`safeslice verify --target "postgres://localhost/myapp_dev"`)
 			}
-			conn, err := pgx.Connect(ctx, target)
-			if err != nil {
-				return fmt.Errorf("connecting to %s: %w", describe(target), err)
-			}
-			defer conn.Close(context.Background())
-
-			schemas := flagSchemas
-			if len(schemas) == 0 {
-				schemas = []string{"public"}
-			}
-			cat, err := catalog.Load(ctx, conn, schemas)
-			if err != nil {
-				return err
-			}
-			skip := map[string]bool{}
-			for _, s := range ignore {
-				skip[s] = true
-			}
-			ui.Info("scanning %s", describe(target))
-			findings, err := verify.Scan(ctx, conn, cat, verify.Options{Sample: sample, Ignore: skip})
-			if err != nil {
-				return err
-			}
-			if len(findings) == 0 {
-				ui.Success("no personal data found")
-				if !flagQuiet {
-					ui.Footer()
-				}
-				return nil
-			}
-			ui.Section("Findings")
-			var rows [][]string
-			for _, f := range findings {
-				rows = append(rows, []string{f.Table.Name, f.Column, f.Kind,
-					fmt.Sprint(f.Matches), f.Sample})
-			}
-			ui.Table([]string{"TABLE", "COLUMN", "LOOKS LIKE", "ROWS", "SAMPLE"}, rows)
-			return ui.Hint(
-				fmt.Errorf("found personal data in %d columns", len(findings)),
-				"Add a rule for each in safeslice.yaml, then run again. If a match is a "+
-					"false positive, exclude it with --ignore table.column.")
+			return doVerify(cmd.Context(), target, sample, ignore)
 		},
 	}
 	f := cmd.Flags()
@@ -94,4 +55,47 @@ evidence for a compliance review.`,
 	f.IntVar(&sample, "sample", 1000, "rows to examine per column")
 	f.StringSliceVar(&ignore, "ignore", nil, "columns to skip, as table.column (repeatable)")
 	return cmd
+}
+
+// doVerify scans a database for surviving personal data. Shared by the `verify`
+// command and the guided menu.
+func doVerify(ctx context.Context, target string, sample int, ignore []string) error {
+	conn, err := pgx.Connect(ctx, target)
+	if err != nil {
+		return ui.Hint(err, "Check the host, port and credentials for the target database.")
+	}
+	defer conn.Close(context.Background())
+
+	schemas := flagSchemas
+	if len(schemas) == 0 {
+		schemas = []string{"public"}
+	}
+	cat, err := catalog.Load(ctx, conn, schemas)
+	if err != nil {
+		return err
+	}
+	skip := map[string]bool{}
+	for _, s := range ignore {
+		skip[s] = true
+	}
+	ui.Info("scanning %s", describe(target))
+	findings, err := verify.Scan(ctx, conn, cat, verify.Options{Sample: sample, Ignore: skip})
+	if err != nil {
+		return err
+	}
+	if len(findings) == 0 {
+		ui.Success("no personal data found")
+		return nil
+	}
+	ui.Section("Findings")
+	var rows [][]string
+	for _, f := range findings {
+		rows = append(rows, []string{f.Table.Name, f.Column, f.Kind,
+			fmt.Sprint(f.Matches), f.Sample})
+	}
+	ui.Table([]string{"TABLE", "COLUMN", "LOOKS LIKE", "ROWS", "SAMPLE"}, rows)
+	return ui.Hint(
+		fmt.Errorf("found personal data in %d columns", len(findings)),
+		"Add a rule for each in safeslice.yaml, then run again. If a match is a "+
+			"false positive, exclude it with --ignore table.column.")
 }

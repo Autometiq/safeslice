@@ -88,12 +88,16 @@ by ` + ui.Vendor + ` • ` + ui.VendorURL,
 		Version:       resolveVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		// No arguments opens the guided menu. Printing usage to someone who has
+		// just installed the tool tells them what exists, not what to do.
+		RunE: func(cmd *cobra.Command, _ []string) error { return runMenu(cmd.Context()) },
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			ui.SetPlain(flagNoColor)
 			// The banner is chrome. It has no place in generated shell
 			// completion scripts, and no place when the user asked for quiet.
-			if flagQuiet || isCompletion(cmd) {
-				return
+			if flagQuiet || isCompletion(cmd) || cmd.Name() == "safeslice" || cmd.Name() == "menu" {
+				return // the menu draws its own splash
 			}
 			ui.Banner(resolveVersion())
 		},
@@ -104,7 +108,7 @@ by ` + ui.Vendor + ` • ` + ui.VendorURL,
 	pf.BoolVar(&flagNoColor, "no-color", false, "disable colour and box drawing")
 	pf.BoolVarP(&flagQuiet, "quiet", "q", false, "suppress the banner and footer")
 
-	cmd.AddCommand(initCmd(), planCmd(), runCmd(), verifyCmd())
+	cmd.AddCommand(initCmd(), planCmd(), runCmd(), verifyCmd(), demoCmd(), menuCmd())
 	return cmd
 }
 
