@@ -41,7 +41,7 @@ while IFS= read -r f; do
   { printf '%s\n\n' "$HEADER"; cat "$f"; } > "$tmp"
   mv "$tmp" "$f"
   echo "added: $f"
-done < <(find . -name '*.go' -not -path './vendor/*')
+done < <(find . -name '*.go' -not -path './vendor/*' -not -path '*/node_modules/*')
 
 if $CHECK && [ "$missing" -gt 0 ]; then
   echo "$missing file(s) missing the licence header; run ./scripts/addlicense.sh"

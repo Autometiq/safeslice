@@ -1,12 +1,8 @@
 <div align="center">
 
-<img src="logo.webp" alt="safeslice" width="280" />
+<img src="logo.webp" alt="safeslice" width="240" />
 
-<br />
-
-### 🔒 Shrink & mask production Postgres — in a single command
-
-<br />
+### Create production-like PostgreSQL development databases — without copying production PII
 
 [![CI](https://github.com/Autometiq/safeslice/actions/workflows/ci.yml/badge.svg)](https://github.com/Autometiq/safeslice/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/Autometiq/safeslice?style=flat-square&color=00ADD8)](go.mod)
@@ -14,310 +10,293 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-10B981?style=flat-square)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Autometiq/safeslice?style=flat-square)](https://goreportcard.com/report/github.com/Autometiq/safeslice)
 
+[Install](#install) · [How it works](#how-it-works) · [Masking](#masking) · [Security](#security-model) · [CLI](#advanced-cli--cicd) · [Contributing](#contributing)
+
 <br />
 
-[Installation](#-installation) · [Quickstart](#-quickstart) · [Commands](#-commands) · [Configuration](#-configuration-reference) · [Contributing](#-development)
+<img src="media/safeslice-demo.gif" alt="Safeslice turns a production PostgreSQL database into a small, masked, referentially-intact development database" width="820" />
 
 </div>
 
 <br />
 
-<div align="center">
+## The problem
 
-```bash
-safeslice run --from "$PROD_URL" --table users --where "id = 4821" --to "$LOCAL_URL"
-```
+You need realistic data to find real bugs — the null that only exists in row 4,000,000, the customer with 900 orders who breaks the query, the encoding no seed script invents.
 
-**One static Go binary. No runtime, no server, no Kubernetes, no control plane.**
+You cannot put production data on a laptop. A `pg_dump` does not know which columns are people, so it copies **all** of them onto unmanaged laptops, into CI logs, into local backups. And it does not fit anyway.
 
-</div>
+**Safeslice takes a slice, not a copy.** A few thousand rows instead of 480 GB, with every name, email, phone and card number replaced on the way out, every foreign key still intact, and a privacy scan over the result.
 
 <br />
 
-## 🧠 Why safeslice exists
-
-**Every engineering team hits the same wall.** You need realistic data locally to reproduce a bug or test a pipeline. You cannot legally put production data on a laptop, and you physically cannot fit 500 GB on one either. So the team writes seed scripts that generate fake companies linked to fake users — and those scripts never survive contact with real edge cases. Code that passes on 10 synthetic rows breaks on the nulls, the encodings, and the volume of production.
-
-**The two tools that solved this are gone.** [Snaplet](https://supabase.com/blog/snaplet-is-now-open-source) shut down in August 2024. [Neosync](https://github.com/nucleuscloud/neosync) was archived in August 2025 after an acquisition — the hosted service is offline and the issue tracker is read-only. Neither died from lack of users. Both were open-source loss-leaders for a SaaS, and Neosync in particular was an orchestration platform built on Temporal, which is precisely why it needed revenue to exist. Teams that adopted either are now carrying an unmaintained dependency in their compliance path.
-
-**A static binary cannot be shut down.** safeslice has no hosted service, no scheduler, and no database of its own. It reads one Postgres and writes another. It runs on a laptop, in CI, or on a bastion host, and it has no operating costs to fund. That is a deliberate architectural constraint, not an accident of scope — and it is why it will still work in five years.
-
-<br />
-
-## 📦 Installation
-
-Download the binary for your platform from [**Releases**](https://github.com/Autometiq/safeslice/releases) — one file, nothing else required. No Go, no Python, no libc dependency. Linux, macOS and Windows, on amd64 and arm64.
-
-**Linux / macOS**
+## Install
 
 ```bash
-curl -sSfL https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_linux_amd64.tar.gz | tar xz
-sudo mv safeslice /usr/local/bin/
-```
-
-**Windows (PowerShell)**
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_windows_amd64.zip" -OutFile safeslice.zip
-Expand-Archive safeslice.zip -DestinationPath .
-# then move safeslice.exe somewhere on your PATH
+go install github.com/Autometiq/safeslice/cmd/safeslice@latest
 ```
 
 <details>
-<summary>🔽 Other methods</summary>
+<summary>Other ways to install</summary>
+
+<br />
+
+Prebuilt binaries, Docker images and Linux packages are produced by [goreleaser](.goreleaser.yaml) for Linux, macOS and Windows on amd64 and arm64 whenever a `v*` tag is pushed:
 
 ```bash
-# Go toolchain (any OS)
-go install github.com/Autometiq/safeslice/cmd/safeslice@latest
+# Binary (once a release is published)
+curl -sSfL https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_linux_amd64.tar.gz | tar xz
+sudo mv safeslice /usr/local/bin/
 
 # Docker
 docker run --rm ghcr.io/autometiq/safeslice:latest --help
 
-# Debian / Ubuntu
+# Debian / Ubuntu · RHEL / Fedora · Alpine
 sudo dpkg -i safeslice_amd64.deb
-
-# RHEL / Fedora
-sudo rpm -i safeslice_amd64.rpm
-
-# Alpine
+sudo rpm  -i safeslice_amd64.rpm
 sudo apk add --allow-untrusted safeslice_amd64.apk
 ```
 
-On Windows, `go install` places the binary in `$env:USERPROFILE\go\bin`.
+One static binary. No runtime, no server, no control plane. `CGO_ENABLED=0`, including the SQLite key store, so there is no libc dependency either.
 
 </details>
 
 <br />
 
-## 🚀 Quickstart
-
-**The short version.** Run it with no arguments and answer the questions:
+## Use it
 
 ```bash
 safeslice
 ```
 
-The wizard connects to your source, reads the schema, asks about the columns it
-cannot judge, shows you exactly what the slice contains **before** anything
-moves, loads it, verifies the result, and writes the report. It ends with a
-connection string you can paste into your app.
+That is the whole workflow. The wizard connects to your source, reads the schema, asks about the columns it cannot judge, shows you exactly what the slice contains **before anything moves**, loads it, verifies the result and writes the report.
 
-Everything below is the same workflow as individual commands, which is what CI
-and scripts should use.
+```
+  What would you like to do?
+
+❯ 1  Create a safe development database   the whole workflow, start to finish
+  2  Inspect an existing configuration    what a run would do; reads no data
+  3  Verify an existing database          scan for personal data that survived
+  4  Run demo                             throwaway database — nothing of yours is touched
+  5  Advanced / CLI mode                  the commands behind all of this
+  6  Quit
+```
+
+No database of your own yet? Pick **Run demo** — it starts a throwaway PostgreSQL in Docker, seeds it with realistic fake customers, and runs the entire pipeline against it.
 
 <br />
 
-**1. Generate a config from your live schema.**
+## What a run looks like
 
-```bash
-safeslice init --from "$PROD_URL"
-```
-
-This introspects your database and writes `safeslice.yaml` with every likely personal-data column already classified — emails, phones, names, addresses, credentials, card and government IDs.
-
-**2. Review the columns it could not judge.**
-
-```yaml
-mask:
-  strict: true
-  rules:
-    # Detected from column names.
-    users.email: email
-    users.password: secret
-
-    # Free-text columns safeslice could not judge. They are set to `keep`
-    # so this config runs, but each one is a decision you still owe.
-    support_tickets.body: keep   # REVIEW: does this hold personal data?
-```
-
-No name-based heuristic knows that `col_7` holds a passport number. safeslice tells you exactly which columns it is unsure about instead of guessing — and with `strict: true`, an unreviewed text column stops the run rather than leaking quietly.
-
-Commit this file. That is the adoption mechanism: one engineer commits it, and every teammate and every CI job inherits the same rules.
-
-**3. Pull the slice.**
-
-```bash
-safeslice run --from "$PROD_URL" --to "postgres://localhost/dev"
-```
+Real output, abbreviated:
 
 ```
-safeslice v0.1.0
-Fast, referentially-intact database subsetting & masking
-by Autometiq • https://autometiq.com
+== Database discovered ==
 
-[INFO] source app@prod-replica:5432/main (read-only session)
-[PLAN] walking the foreign-key graph
-[SUCCESS] foreign-key closure complete
+  Tables                    7
+  Relationships             6
+  Sensitive columns found   9
+  Classified automatically  5
+  Need your decision        4
 
-╭────────────────────────────────────────────────────────────╮
-│  Tables processed:          14                             │
-│  Rows extracted & masked:   48,210                         │
-│  Columns masked:            37                             │
-│  Execution time:            6.41s                          │
-│  Loaded into:               dev@localhost:5432/dev         │
-│                                                            │
-│  Zero FK orphans   — foreign keys stayed enforced          │
-│  37 columns masked — run `safeslice verify` to confirm     │
-╰────────────────────────────────────────────────────────────╯
+  comments.body                      redact   free text
+  companies.slug                     secret   unique, cannot be emptied
+  order_items.sku                    redact   unbounded text
+
+== Slice preview ==
+
+  TABLE                 ROWS
+  public.companies      3
+  public.events         12
+  public.users  (root)  12
+
+  Total                 27
+
+  ✓ Foreign-key closure complete — every row brings its parents
+  ⚠ 1 relationship the database does not enforce, so it was not followed:
+    comments.commentable_id (polymorphic, with commentable_type) — no foreign key
+
+╭──────────────────────────────────────────────────────╮
+│                  SAFESLICE REVIEW                    │
+├──────────────────────────────────────────────────────┤
+│ Source         shop   localhost:5432                 │
+│ Target         shop_dev                              │
+│ Rows           27                                    │
+│ Masked         6 columns                             │
+│ Redacted       3 columns                             │
+│                                                      │
+│ ✓ Source is read-only — it will not be modified      │
+│ ✓ Foreign-key integrity preserved                    │
+│ ✓ Free text reviewed                                 │
+╰──────────────────────────────────────────────────────╯
+
+❯ 1  Create the database   start reading and loading
+  2  Change masking
+  ...
 ```
 
-**Then prove it is clean.**
-
-```bash
-safeslice verify --target "postgres://localhost/dev"
-```
-
-Scans for live email addresses, phone numbers, IP addresses and Luhn-valid payment cards, and exits non-zero on any finding. Gate your CI on it, or hand the output to a compliance reviewer.
+Nothing is read from your tables and nothing is written to the target until you choose **Create the database**.
 
 <br />
 
-## ✅ What safeslice solves
+## How it works
 
-The easy 80% of database subsetting is a weekend project. These are the cases that break everything else — each one verified by an end-to-end test against real PostgreSQL:
+| | |
+|---|---|
+| **1. Discover** | Reads `pg_catalog` for tables, columns, primary keys, unique constraints, identity and generated columns, sequences and partitions. No table data. |
+| **2. Slice** | Walks the foreign-key graph from a root table. Parents are followed transitively, children to a bounded depth, so the result is referentially complete but not the whole database. |
+| **3. Mask** | Replaces personal data in transit, deterministically, before it ever reaches disk. |
+| **4. Load** | Streams into the target in dependency order inside one transaction, handling cycles, identity columns, generated columns, sequences and triggers. |
+| **5. Verify** | Scans the loaded database for values that still look like real personal data, and writes the report. |
 
-| | Feature | Detail |
+The whole read side runs inside one `REPEATABLE READ` snapshot, so a parent row cannot vanish between the query that found a child and the query that fetches the parent.
+
+<br />
+
+## Masking
+
+Deterministic by design: the same input and seed always produce the same replacement, so `users.email` and `invoices.billing_email` still join after masking. These are real outputs at seed `safeslice`:
+
+| Column | Before | After |
 |---|---|---|
-| ✅ | **Non-`DEFERRABLE` FK cycles** | `SET CONSTRAINTS ALL DEFERRED` only affects constraints declared `DEFERRABLE`, and Rails and Django do not declare them. safeslice breaks the cycle by inserting the closing column as `NULL`, then restoring it once every row exists. |
-| ✅ | **Polymorphic & virtual keys** | Rails `commentable_type`/`commentable_id` and Django generic relations have no foreign key. Declare them in YAML and they join the graph like any other edge. |
-| ✅ | **Deterministic masking** | The same input always yields the same fake, so a customer email appearing in three tables masks identically and every join still works. |
-| ✅ | **Zero-leak verification** | `verify` is a standalone auditor, not a self-report. Its output is redacted, so the leak report never becomes a second leak. |
-| ✅ | **Transitive parent closure** | Every selected row drags its referenced rows along, recursively. Foreign keys stay enforced throughout the load. |
-| ✅ | **Identity & generated columns** | `GENERATED ALWAYS AS IDENTITY` gets `OVERRIDING SYSTEM VALUE`. Stored columns are recomputed from *masked* values. |
-| ✅ | **Sequence resync** | Without `setval`, the application's very first insert collides on the primary key. Every owned sequence is advanced past the slice. |
-| ✅ | **Composite & non-primary keys** | Composite foreign keys keep column order. Keys pointing at `UNIQUE` rather than the PK resolve correctly. |
-| ✅ | **Partitioned tables** | FK on a partitioned parent is duplicated on every partition; without normalising to the root, the load fails on a duplicate key. |
-| ✅ | **Unique-constraint collisions** | Two distinct emails hashing to one fake would fail the load. Collisions are retried with a salt until the value is free. |
-| ✅ | **Type fidelity** | A phone stored as `bigint` gets a numeric fake. A type that cannot be masked safely is a hard error, never a silent corruption. |
-| ✅ | **Bounded memory** | The key closure spills to a local SQLite file instead of a Go map, so a 500 GB source does not become tens of GBs of RSS. |
-| ✅ | **Production safety** | Source session is read-only inside `REPEATABLE READ`. Loading into the same database you are reading from is refused outright. |
+| `users.email` | `john@example.com` | `user_0b1343bf051a1e1c@example.invalid` |
+| `users.first_name` | `John` | `Riley` |
+| `users.last_name` | `Smith` | `Kowalski` |
+| `users.phone` | `+1 555 010 2938` | `+15550563127` |
+| `payments.card_number` | `4111111111111111` | `00D1AF1CBD6` |
+| `users.password` | `hunter2` | `REDACTED` |
+| `tickets.body` | `Called about a refund…` | *dropped* |
+
+Rules: `email` `phone` `name` `first_name` `last_name` `address` `govid` `ip` `secret` `redact` `keep`.
+
+Key columns are never masked — rewriting them would destroy the referential integrity the slice exists to preserve. Values are constraint-aware: `NOT NULL` is respected, `varchar(n)` is not overflowed, an `int` column never receives a string, and a column under a `UNIQUE` index is retried until the generated value is free.
+
+**Free text is the honest limit.** No regex reliably scrubs a support ticket that happens to quote a customer's address. Safeslice does not pretend otherwise: it surfaces every unclassified text column and asks, and `strict` mode (on by default) refuses to run while any remain unreviewed.
 
 <br />
 
-## 📋 Configuration reference
+## What you get
 
-<details>
-<summary><code>safeslice.yaml</code></summary>
+```
+safeslice-output/
+├── README.md            what ran, what was masked, how to connect
+├── report.html          offline report — no CDN, no scripts, opens from disk
+├── summary.json         machine-readable result for CI
+├── tables.csv           per-table metadata (never row data)
+└── masking-rules.yaml   the rules applied, ready to commit
+```
+
+Plus a `safeslice.yaml` in your project, so the same slice is repeatable by anyone on the team and by CI. No artifact ever contains a password — a test walks every generated file to prove it.
+
+<br />
+
+## Security model
+
+- **The source is opened read-only.** `SET default_transaction_read_only = on` before anything else runs, so no bug here and no predicate you paste can write to production. Run it against a replica.
+- **It refuses to run** when the target resolves to the same host, port and database as the source.
+- **Destructive target operations require typing the database name.** Nothing is silently overwritten.
+- **Credentials are never printed or stored.** Connection strings are reduced to host/port/database/user before reaching any log, report or saved profile.
+- **Verification is a safety check, not a proof.** A clean scan means no known pattern of personal data was detected in the sampled rows. It is not a mathematical guarantee that arbitrary free text contains none, and Safeslice never claims it is.
+
+Report a vulnerability: [SECURITY.md](SECURITY.md).
+
+<br />
+
+## Configuration
+
+`safeslice.yaml` is written for you and meant to be committed:
 
 ```yaml
 version: 1
-
 source:
   schemas: [public]
 
 slice:
   root: users
-  where: "created_at > now() - interval '30 days'"
+  where: "created_at > '2026-01-01'"   # optional
   limit: 1000
   child_depth: 1
 
 mask:
-  seed: team-seed          # same seed, same fakes, across the whole team
-  strict: true             # refuse to run on unreviewed text columns
-  pii_tables: [users, invoices]
+  seed: safeslice        # share it, and everyone's snapshots agree
+  strict: true           # unreviewed text columns stop the run
   rules:
     users.email: email
     users.password: secret
-    companies.name: keep   # a company name is not personal data
-    support_tickets.body: redact
+    tickets.body: redact
 
-# Relationships PostgreSQL does not enforce, and therefore cannot reveal.
+# Relationships PostgreSQL does not enforce — Rails polymorphic associations,
+# Django generic relations. Safeslice cannot see them without being told.
 virtual_keys:
   - table: comments
     columns: [commentable_id]
-    references: {table: posts, columns: [id]}
+    references: { table: posts, columns: [id] }
     when: "commentable_type = 'Post'"
 ```
 
-Rules: `keep` · `redact` · `secret` · `email` · `phone` · `govid` · `first_name` · `last_name` · `name` · `address` · `ip`
-
-</details>
-
 <br />
 
-## 🛠 Commands
+## Advanced CLI / CI-CD
+
+The wizard is for humans. These are for scripts:
 
 | Command | Purpose |
 |---|---|
-| `safeslice` | Guided wizard: source → decisions → review → load → verify → report |
-| `safeslice init` | Introspect the schema and generate a reviewable starting config |
-| `safeslice plan` | Show exactly what a run would do — reads no table data |
+| `safeslice init` | Read the schema, generate a reviewable `safeslice.yaml` |
+| `safeslice plan` | Show what a run would do — reads no table data |
 | `safeslice run` | Extract, mask in transit, load into a target or write SQL |
 | `safeslice verify` | Audit a database for surviving personal data; non-zero exit on findings |
-| `safeslice report` | Show and open the report from the last run |
-| `safeslice profiles` | List saved wizard profiles, or past runs with `--history` |
-| `safeslice connections` | List saved connections (never passwords) |
-| `safeslice demo` | Start or stop a throwaway database to try the whole thing on |
-
-The wizard writes `safeslice.yaml` as it goes, so anything you do interactively
-is repeatable non-interactively:
+| `safeslice report` | Show and open the last run's report |
+| `safeslice demo` | Start or stop the throwaway demo database |
 
 ```bash
 safeslice run --config safeslice.yaml --to "$DATABASE_URL"
 safeslice verify --target "$DATABASE_URL"
 ```
 
-<br />
-
-## 📌 Status and scope
-
-**v0.1 — PostgreSQL 13 through 17**, tested against every version in CI.
-
-Masking is name-based and cannot know what an opaque column holds. Review your config before pointing safeslice at a regulated database, and run `verify` afterwards. Masked data is pseudonymous, not anonymous: treat a slice as sensitive, just far less so than the original.
-
-MySQL support will land when an issue asks for it. Servers, schedulers and control planes will not — that is the boundary that turned Neosync into a company that had to die.
+`verify` exits non-zero when it finds anything, so it gates a pipeline as-is.
 
 <br />
 
-## 🧪 Development
+## Architecture
 
-```bash
-go test ./...
+```
+cmd/safeslice        cobra wiring and the interactive wizard
+internal/catalog     pg_catalog introspection
+internal/graph       FK graph, topological order, cycle detection
+internal/keyset      SQLite-backed key closure, spilled to disk
+internal/extract     COPY streaming inside one consistent snapshot
+internal/mask        deterministic transformers
+internal/load        cycle plans, identity/generated columns, sequences
+internal/verify      PII scanner
+internal/report      README, HTML, JSON, CSV, rules artifacts
 ```
 
-Catalog and end-to-end tests require a real PostgreSQL instance and **skip** without one, so a green run on its own does not mean much. Docker is the easiest way to get a throwaway one — it is needed only for the test suite, never to *use* safeslice:
-
-```bash
-docker run -d -e POSTGRES_PASSWORD=pw -p 55432:5432 postgres:17
-SAFESLICE_TEST_DSN="postgres://postgres:pw@localhost:55432/postgres" go test ./...
-```
-
-The end-to-end suite builds a source database seeded with canary values, slices it into a second database, then asserts the only two things that matter: **zero foreign-key orphans**, and **zero canaries surviving**. Neither can be established by unit tests. A subsetting tool that passes its unit tests and fails these is worse than no tool, because it looks like it worked.
-
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Found a masking bypass? Please report it privately via [SECURITY.md](SECURITY.md).
+The key closure lives in a local SQLite file rather than a temp table on the source, which is what lets Safeslice run against a read replica with no write permission anywhere.
 
 <br />
 
----
+## Contributing
+
+```bash
+git clone https://github.com/Autometiq/safeslice
+cd safeslice
+go build ./...
+go test ./...                                    # unit tests
+SAFESLICE_TEST_DSN="postgres://…" go test ./...  # + integration and e2e
+```
+
+The end-to-end suite proves the two properties that matter: **zero foreign-key orphans** after a load, and **zero planted canaries** surviving masking. Both run in CI against PostgreSQL 13 and 17.
+
+Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+<br />
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 <div align="center">
-
-## 🏢 Enterprise support & consulting
-
-**safeslice is built and maintained by [Autometiq](https://autometiq.com/).**
-
-</div>
-
-The open-source CLI is complete and free under Apache 2.0, and always will be. Some data problems need more than a CLI.
-
-Autometiq works with engineering and platform teams on:
-
-| | |
-|---|---|
-| **Custom masking algorithms** | Format-preserving encryption, referentially-consistent synthetic generation, and domain-specific rules for healthcare, financial and regulated datasets that no name-based heuristic can classify. |
-| **Complex data migrations** | Cross-database moves, schema evolution under load, legacy consolidation, and zero-downtime cutovers where a failed migration is not an option. |
-| **CI/CD & platform integration** | Ephemeral per-branch databases, automated refresh pipelines, policy-as-code masking gates, and audit evidence your compliance team will actually accept. |
-| **Compliance engineering** | GDPR, HIPAA and SOC 2 reviews of your development data pipeline, with the controls and documentation to back them up. |
-
-<div align="center">
-
-**[Talk to us → autometiq.com](https://autometiq.com/)**
-
-</div>
-
----
-
-<div align="center">
-
-<sub>Copyright © 2026 <a href="https://autometiq.com/">Autometiq</a> · Licensed under <a href="LICENSE">Apache 2.0</a></sub>
-
+<br />
+Built by <a href="https://autometiq.com">Autometiq</a> · Not affiliated with the PostgreSQL Global Development Group
 </div>
