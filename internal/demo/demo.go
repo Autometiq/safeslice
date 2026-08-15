@@ -106,18 +106,23 @@ func Start(ctx context.Context, progress func(string)) error {
 	if exists(ctx) {
 		say("restarting the demo database")
 		if _, err := run(ctx, "docker", "start", Container); err != nil {
-			return fmt.Errorf("starting the existing demo container: %w", err)
+			// A container left behind by an older safeslice cannot necessarily
+			// be started by this one: earlier versions bind-mounted the schema
+			// from disk, and that mount no longer resolves. The demo database
+			// is disposable by definition, so recreate it rather than hand the
+			// user a wall of Docker internals about rootfs mounts.
+			say("the existing container cannot start; recreating it")
+			if _, rmErr := run(ctx, "docker", "rm", "-f", Container); rmErr != nil {
+				return fmt.Errorf("removing the unusable demo container %s: %w", Container, rmErr)
+			}
+			// Falls through to the readiness wait and seeding below: a fresh
+			// container is empty, however the previous one died.
+			if err := create(ctx, say); err != nil {
+				return err
+			}
 		}
-	} else {
-		say("pulling " + Image + " (first run only)")
-		if _, err := run(ctx, "docker", "run", "-d",
-			"--name", Container,
-			"-e", "POSTGRES_PASSWORD="+Password,
-			"-e", "POSTGRES_DB="+SourceDB,
-			"-p", Port+":5432",
-			Image); err != nil {
-			return fmt.Errorf("starting the demo container: %w", err)
-		}
+	} else if err := create(ctx, say); err != nil {
+		return err
 	}
 
 	say("waiting for PostgreSQL")
@@ -149,6 +154,23 @@ func Start(ctx context.Context, progress func(string)) error {
 	say("loading demo customers")
 	if err := psql(ctx, SourceDB, seedSQL); err != nil {
 		return fmt.Errorf("loading the demo data: %w", err)
+	}
+	return nil
+}
+
+// create starts a fresh demo container. No bind mounts: the schema and seed
+// are embedded in the binary and piped in through `docker exec`, so the
+// container never depends on a path that exists only on the machine that
+// created it.
+func create(ctx context.Context, say func(string)) error {
+	say("pulling " + Image + " (first run only)")
+	if _, err := run(ctx, "docker", "run", "-d",
+		"--name", Container,
+		"-e", "POSTGRES_PASSWORD="+Password,
+		"-e", "POSTGRES_DB="+SourceDB,
+		"-p", Port+":5432",
+		Image); err != nil {
+		return fmt.Errorf("starting the demo container: %w", err)
 	}
 	return nil
 }

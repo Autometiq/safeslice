@@ -42,6 +42,11 @@ type Option struct {
 // def is pre-selected: it carries the pointer and is what Enter returns. Pass
 // -1 for no default, in which case Enter reprompts. Returns -1 when the input
 // stream ends, which must never become an infinite loop.
+//
+// On a real terminal the arrow keys move the pointer. Everywhere else -- piped
+// input, a script, CI, a terminal that will not go into raw mode -- it falls
+// back to typing the number, so `echo 2 | safeslice` still does what you would
+// expect and the tests can drive it.
 func Select(title string, opts []Option, def int) int {
 	if len(opts) == 0 {
 		return -1
@@ -49,6 +54,13 @@ func Select(title string, opts []Option, def int) int {
 	if def >= len(opts) {
 		def = -1
 	}
+	if i, ok := selectKeys(title, opts, def); ok {
+		return i
+	}
+	return selectTyped(title, opts, def)
+}
+
+func selectTyped(title string, opts []Option, def int) int {
 	if title != "" {
 		emitf("%s\n\n", bold(title))
 	}
