@@ -71,7 +71,10 @@ is written to it and every table is read from the same consistent snapshot.`,
 				return err
 			}
 			if to == "" && out == "" {
-				return errors.New("nothing to do: pass --to to load into a database, or --out to write SQL")
+				return ui.HintCmd(
+					errors.New("nothing to do: no destination given"),
+					"Load into a database with --to, or write SQL to a file with --out.",
+					`safeslice run --to "postgres://localhost/myapp_dev"`)
 			}
 			if to != "" {
 				if err := refuseSameDatabase(dsn, to); err != nil {
@@ -79,7 +82,10 @@ is written to it and every table is read from the same consistent snapshot.`,
 				}
 			}
 			if cfg.Slice.Root == "" {
-				return errors.New("no root table: pass --table or set slice.root in the config")
+				return ui.HintCmd(
+					errors.New("no root table: the slice needs somewhere to start"),
+					"Generate a config that picks one for you, or pass --table.",
+					"safeslice init")
 			}
 			return doRun(cmd.Context(), cfg, dsn, to, out, keysPath, childLimit)
 		},
@@ -123,8 +129,10 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 		for _, c := range v {
 			ui.Detail("%s", c)
 		}
-		return fmt.Errorf("strict mode: %d text columns in PII tables have no masking rule; "+
-			"classify them in %s (use `keep` if they hold no personal data)", len(v), config.DefaultPath)
+		return ui.Hint(
+			fmt.Errorf("strict mode: %d text columns hold unreviewed text", len(v)),
+			"Give each one a rule in "+config.DefaultPath+". Use `keep` if it holds no "+
+				"personal data, `redact` to drop it, or `secret` to replace it.")
 	}
 
 	virtual := cfg.FKs()
@@ -141,6 +149,8 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 	defer cleanup()
 
 	total, tables := 0, 0
+	var live *ui.Live
+	extractStart := time.Now()
 	opt := extract.Options{
 		Root:       root,
 		Where:      cfg.Slice.Where,
@@ -149,6 +159,14 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 		ChildLimit: childLimit,
 		Seed:       cfg.Mask.Seed,
 		Classifier: cfg.Classifier(),
+		Discovered: func(ref catalog.Ref, keys, tbls int) {
+			live.Detail("%s rows across %d tables", ui.Count(keys), tbls)
+		},
+		Extracting: func(ref catalog.Ref, rows int) {
+			live.Label("extracting %s", ref)
+			live.Detail("%s rows  %s", ui.Count(total+rows),
+				ui.Rate(total+rows, time.Since(extractStart)))
+		},
 		Progress: func(ref catalog.Ref, rows int) {
 			total += rows
 			tables++
@@ -161,25 +179,33 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 	}
 	defer ex.Close(context.Background())
 
-	ui.PlanStep("walking the foreign-key graph")
+	live = ui.Start("walking the foreign-key graph")
 	if err := ex.Collect(ctx); err != nil {
+		live.Stop()
 		return err
 	}
-	ui.Success("foreign-key closure complete")
+	live.Success("foreign-key closure complete in %s", ui.Duration(live.Elapsed()))
 
 	ui.Section("Extract")
+	live = ui.Start("extracting")
+	extractStart = time.Now()
 
 	dest, closeDest, err := openSink(ctx, cat, plan, to, out)
 	if err != nil {
 		return err
 	}
 	if err := ex.Stream(ctx, dest, plan); err != nil {
+		live.Stop()
 		closeDest(false)
-		return err
+		return hintLoadFailure(err)
 	}
+	live.Label("committing")
+	live.Detail("")
 	if err := closeDest(true); err != nil {
+		live.Stop()
 		return err
 	}
+	live.Stop()
 
 	stats := ui.RunStats{
 		Tables:        tables,
@@ -195,8 +221,32 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 	}
 	if !flagQuiet {
 		ui.Summary(stats)
+		if to != "" {
+			ui.NextStep("safeslice verify --target %q", to)
+		}
 	}
 	return nil
+}
+
+// hintLoadFailure turns the two failures users actually hit into instructions.
+//
+// safeslice loads data, not schema. Pointed at a freshly created database it
+// fails with "relation \"users\" does not exist", which is accurate and tells
+// the reader nothing about running their migrations first.
+func hintLoadFailure(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "42P01"), strings.Contains(msg, "does not exist"):
+		return ui.HintCmd(err,
+			"The target has no schema. safeslice copies rows, not table definitions, "+
+				"so create them with your usual migrations first.",
+			"createdb myapp_dev && <your migration command>")
+	case strings.Contains(msg, "permission denied"):
+		return ui.Hint(err,
+			"The target role cannot write to these tables. Loading needs INSERT, and "+
+				"disabling triggers during the load needs table ownership.")
+	}
+	return err
 }
 
 // warnings is set by the sink so skipped optional steps -- most often disabling

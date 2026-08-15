@@ -87,6 +87,11 @@ holds a passport number.`,
 				}
 			}
 			if !flagQuiet {
+				if len(review) > 0 {
+					ui.NextStep("$EDITOR %s", out)
+				} else {
+					ui.NextStep("safeslice plan")
+				}
 				ui.Footer()
 			}
 			return nil

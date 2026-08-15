@@ -21,6 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"runtime/debug"
+	"syscall"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
@@ -39,10 +42,36 @@ var (
 )
 
 func main() {
+	// A Ctrl-C during a spinner would otherwise leave the terminal with the
+	// cursor hidden until the user runs `reset`.
+	defer ui.RestoreCursor()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		ui.RestoreCursor()
+		os.Exit(130)
+	}()
+
 	if err := rootCmd().Execute(); err != nil {
-		// Cobra prints the message; exit non-zero so CI notices.
+		ui.RestoreCursor()
+		ui.Fatal(err)
 		os.Exit(1)
 	}
+}
+
+// resolveVersion reports the build version. Binaries built by goreleaser carry
+// it in ldflags; `go install` builds do not, and reporting "dev" makes every bug
+// report untraceable. The module's own build info fills that gap.
+func resolveVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version
+	}
+	return info.Main.Version
 }
 
 func rootCmd() *cobra.Command {
@@ -56,9 +85,9 @@ foreign-key violations. Personal data is replaced with deterministic fakes on
 the way out, so nothing identifying reaches a developer laptop.
 
 by ` + ui.Vendor + ` • ` + ui.VendorURL,
-		Version:       version,
+		Version:       resolveVersion(),
 		SilenceUsage:  true,
-		SilenceErrors: false,
+		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			ui.SetPlain(flagNoColor)
 			// The banner is chrome. It has no place in generated shell
@@ -66,7 +95,7 @@ by ` + ui.Vendor + ` • ` + ui.VendorURL,
 			if flagQuiet || isCompletion(cmd) {
 				return
 			}
-			ui.Banner(version)
+			ui.Banner(resolveVersion())
 		},
 	}
 	pf := cmd.PersistentFlags()

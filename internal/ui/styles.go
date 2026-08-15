@@ -105,7 +105,7 @@ func bold(s string) string {
 }
 
 func line(b, msg string) {
-	fmt.Fprintf(out, "%s %s\n", b, msg)
+	emitf("%s %s\n", b, msg)
 }
 
 // Info reports ordinary progress.
@@ -135,16 +135,16 @@ func Error(err error) {
 // Detail prints an indented supporting line, dimmed so it reads as subordinate
 // to the badge above it.
 func Detail(format string, a ...any) {
-	fmt.Fprintf(out, "  %s\n", tint(fmt.Sprintf(format, a...), slate))
+	emitf("  %s\n", tint(fmt.Sprintf(format, a...), slate))
 }
 
 // Section prints a heading between phases.
 func Section(title string) {
 	if plain {
-		fmt.Fprintf(out, "\n== %s ==\n", title)
+		emitf("\n== %s ==\n", title)
 		return
 	}
-	fmt.Fprintf(out, "\n%s\n", lipgloss.NewStyle().Bold(true).Foreground(emerald).Render(title))
+	emitf("\n%s\n", lipgloss.NewStyle().Bold(true).Foreground(emerald).Render(title))
 }
 
 // Banner prints the startup header.
@@ -152,10 +152,10 @@ func Banner(version string) {
 	name := bold(tint("safeslice", emerald)) + " " + tint(version, slate)
 	attribution := tint(fmt.Sprintf("by %s • %s", Vendor, VendorURL), slate)
 	if plain {
-		fmt.Fprintf(out, "safeslice %s\n%s\nby %s • %s\n\n", version, Mission, Vendor, VendorURL)
+		emitf("safeslice %s\n%s\nby %s • %s\n\n", version, Mission, Vendor, VendorURL)
 		return
 	}
-	fmt.Fprintf(out, "\n%s\n%s\n%s\n\n", name, tint(Mission, slate), attribution)
+	emitf("\n%s\n%s\n%s\n\n", name, tint(Mission, slate), attribution)
 }
 
 // RunStats is what a completed run reports.
@@ -213,9 +213,9 @@ func Summary(s RunStats) {
 
 	content := strings.Join(body, "\n")
 	if plain {
-		fmt.Fprintf(out, "\n%s\n%s\n%s\n", strings.Repeat("-", 60), content, strings.Repeat("-", 60))
+		emitf("\n%s\n%s\n%s\n", strings.Repeat("-", 60), content, strings.Repeat("-", 60))
 	} else {
-		fmt.Fprintln(out, "\n"+lipgloss.NewStyle().
+		emit1("\n" + lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).BorderForeground(emerald).
 			Padding(0, 2).Render(content))
 	}
@@ -231,10 +231,10 @@ func Summary(s RunStats) {
 func Footer() {
 	msg := "Need custom masking rules or enterprise pipeline integration? " + VendorURL
 	if plain {
-		fmt.Fprintf(out, "%s\n", msg)
+		emitf("%s\n", msg)
 		return
 	}
-	fmt.Fprintf(out, "%s\n", tint(msg, slate))
+	emitf("%s\n", tint(msg, slate))
 }
 
 // Duration formats an elapsed time the way a developer reads it: milliseconds
@@ -278,7 +278,7 @@ func Table(headers []string, rows [][]string) {
 			}
 			parts[i] = pad
 		}
-		fmt.Fprintf(out, "  %s\n", strings.TrimRight(strings.Join(parts, "  "), " "))
+		emitf("  %s\n", strings.TrimRight(strings.Join(parts, "  "), " "))
 	}
 	render(headers, true)
 	for _, r := range rows {
@@ -288,5 +288,5 @@ func Table(headers []string, rows [][]string) {
 
 // Step prints a progress line for one unit of work.
 func Step(count int, label string) {
-	fmt.Fprintf(out, "  %s  %s\n", tint(fmt.Sprintf("%8d", count), emerald), label)
+	emitf("  %s  %s\n", tint(fmt.Sprintf("%8d", count), emerald), label)
 }

@@ -83,9 +83,10 @@ evidence for a compliance review.`,
 					fmt.Sprint(f.Matches), f.Sample})
 			}
 			ui.Table([]string{"TABLE", "COLUMN", "LOOKS LIKE", "ROWS", "SAMPLE"}, rows)
-			return fmt.Errorf("found personal data in %d columns; add rules for them in "+
-				"safeslice.yaml, or pass --ignore table.column if the match is a false positive",
-				len(findings))
+			return ui.Hint(
+				fmt.Errorf("found personal data in %d columns", len(findings)),
+				"Add a rule for each in safeslice.yaml, then run again. If a match is a "+
+					"false positive, exclude it with --ignore table.column.")
 		},
 	}
 	f := cmd.Flags()

@@ -64,7 +64,17 @@ type Options struct {
 	Classifier mask.Classifier
 	// Progress is called after each table is written.
 	Progress func(table catalog.Ref, rows int)
+	// Discovered is called as the graph walk finds rows, so a traversal that
+	// takes minutes on a large database is visibly making headway rather than
+	// looking hung.
+	Discovered func(table catalog.Ref, keys, tables int)
+	// Extracting is called periodically while a table streams, with the running
+	// row count. One big table would otherwise print nothing until it finished.
+	Extracting func(table catalog.Ref, rows int)
 }
+
+// progressEvery bounds how often streaming reports back.
+const progressEvery = 500
 
 func (o *Options) defaults() {
 	if o.BatchSize <= 0 {
@@ -85,6 +95,8 @@ type Extractor struct {
 	keys  *keyset.Store
 	fks   []catalog.FK
 	opt   Options
+	found int             // rows discovered so far, for progress
+	seen  map[string]bool // tables touched so far, for progress
 }
 
 // Begin opens the consistent read transaction the whole extraction runs in.
@@ -105,6 +117,7 @@ func Begin(ctx context.Context, conn *pgx.Conn, cat *catalog.Catalog, virtual []
 		cat:   cat,
 		graph: g,
 		keys:  keys,
+		seen:  map[string]bool{},
 		// Partition-normalised and deduplicated: ordering off the raw catalog
 		// list would reintroduce partitions as independent tables.
 		fks: g.Edges(),
@@ -129,6 +142,16 @@ func (e *Extractor) Snapshot(ctx context.Context) (string, error) {
 // inserted without the rows it references. Children are optional context and
 // stop at ChildDepth, because following them without a bound reaches the whole
 // database through any popular table.
+// report notifies the caller that the walk found rows, for live progress.
+func (e *Extractor) report(ref catalog.Ref, n int) {
+	if e.opt.Discovered == nil || n == 0 {
+		return
+	}
+	e.found += n
+	e.seen[ref.String()] = true
+	e.opt.Discovered(ref, e.found, len(e.seen))
+}
+
 func (e *Extractor) Collect(ctx context.Context) error {
 	root := e.graph.ReadTarget(e.opt.Root)
 	rootKeys, err := e.rootKeys(ctx, root)
@@ -148,6 +171,7 @@ func (e *Extractor) Collect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	e.report(root, len(fresh))
 	queue := []work{{root, fresh, 0}}
 
 	for len(queue) > 0 {
@@ -166,6 +190,7 @@ func (e *Extractor) Collect(ctx context.Context) error {
 				return err
 			}
 			if len(newKeys) > 0 {
+				e.report(fk.RefTable, len(newKeys))
 				queue = append(queue, work{fk.RefTable, newKeys, w.depth})
 			}
 		}
@@ -183,6 +208,7 @@ func (e *Extractor) Collect(ctx context.Context) error {
 				return err
 			}
 			if len(newKeys) > 0 {
+				e.report(fk.Table, len(newKeys))
 				queue = append(queue, work{fk.Table, newKeys, w.depth + 1})
 			}
 		}
@@ -426,6 +452,10 @@ func (e *Extractor) streamTable(ctx context.Context, sink Sink, ref catalog.Ref,
 				return err
 			}
 			count++
+			// Throttled: a callback per row would cost more than the copy.
+			if e.opt.Extracting != nil && count%progressEvery == 0 {
+				e.opt.Extracting(ref, count)
+			}
 		}
 		return rows.Err()
 	})
