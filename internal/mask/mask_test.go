@@ -275,3 +275,57 @@ func TestParseRule(t *testing.T) {
 		t.Error("a typo in config must fail loudly, not silently keep the real value")
 	}
 }
+
+func TestSecretFillsAUniqueColumn(t *testing.T) {
+	// The bug this pins: `secret` used to return the same literal for every
+	// row, so a UNIQUE api_key or token column failed the load on its second
+	// row -- after the slice had already been extracted and masked.
+	m := Masker{Seed: "team-seed"}
+	c := col("api_key", "text", notNull)
+	u := NewUniqueSet()
+
+	seen := map[string]bool{}
+	for _, in := range []string{"key-a", "key-b", "key-c"} {
+		got, err := u.Ensure(func(salt int) (*string, error) { return m.Value(Secret, c, s(in), salt) })
+		if err != nil {
+			t.Fatalf("Ensure(%s): %v", in, err)
+		}
+		if seen[*got] {
+			t.Fatalf("secret produced %q twice; a unique constraint would reject it", *got)
+		}
+		seen[*got] = true
+	}
+	if !seen["REDACTED"] {
+		t.Error("the first row should still read REDACTED; only collisions need a suffix")
+	}
+}
+
+func TestRedactCannotFillAUniqueNotNullColumn(t *testing.T) {
+	// No salt escapes an empty string, so this has to be refused up front
+	// rather than discovered a thousand retries into a load.
+	if err := SatisfiesUnique(Redact, col("slug", "text", notNull)); err == nil {
+		t.Error("redact on a UNIQUE NOT NULL column was accepted")
+	}
+	// Nullable is fine: NULLs do not collide in a unique index.
+	if err := SatisfiesUnique(Redact, col("slug", "text")); err != nil {
+		t.Errorf("redact on a nullable unique column was refused: %v", err)
+	}
+	if err := SatisfiesUnique(Email, col("email", "text", notNull)); err != nil {
+		t.Errorf("email on a unique column was refused: %v", err)
+	}
+}
+
+func TestUniqueSetGivesUpOnASaltInvariantRule(t *testing.T) {
+	u := NewUniqueSet()
+	constant := func(int) (*string, error) { return s("same"), nil }
+	if _, err := u.Ensure(constant); err != nil {
+		t.Fatalf("first value: %v", err)
+	}
+	_, err := u.Ensure(constant)
+	if err == nil {
+		t.Fatal("a constant generator was allowed to collide silently")
+	}
+	if !strings.Contains(err.Error(), "secret") {
+		t.Errorf("error does not say what to do instead: %v", err)
+	}
+}

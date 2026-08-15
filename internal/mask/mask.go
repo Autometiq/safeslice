@@ -29,6 +29,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -232,7 +233,7 @@ func (m Masker) Value(rule Rule, col catalog.Column, in *string, salt int) (*str
 	hexs := hex.EncodeToString(sum)
 	n := binary.BigEndian.Uint64(sum[:8])
 
-	out, err := m.render(rule, col, hexs, n)
+	out, err := m.render(rule, col, hexs, n, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +258,7 @@ func (m Masker) Apply(rule Rule, col catalog.Column, v any, salt int) (any, erro
 		return "", nil
 	}
 	sum := m.digest(fmt.Sprintf("%v", v), salt)
-	out, err := m.render(rule, col, hex.EncodeToString(sum), binary.BigEndian.Uint64(sum[:8]))
+	out, err := m.render(rule, col, hex.EncodeToString(sum), binary.BigEndian.Uint64(sum[:8]), salt)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +269,7 @@ func (m Masker) Apply(rule Rule, col catalog.Column, v any, salt int) (any, erro
 }
 
 // render produces the replacement in the Go type matching the column.
-func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64) (any, error) {
+func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, salt int) (any, error) {
 	switch k := kindOf(col); k {
 	case kindOther:
 		// Writing a fake string into a geometry, array or enum column would
@@ -291,14 +292,21 @@ func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64) (an
 	case kindInet:
 		return fmt.Sprintf("203.0.113.%d", n%254+1), nil // RFC 5737 TEST-NET-3
 	default:
-		return m.text(rule, hexs, n), nil
+		return m.text(rule, hexs, n, salt), nil
 	}
 }
 
-func (m Masker) text(rule Rule, hexs string, n uint64) string {
+func (m Masker) text(rule Rule, hexs string, n uint64, salt int) string {
 	switch rule {
 	case Secret:
-		return "REDACTED"
+		// One literal reads best in a dev database, but a unique column needs
+		// distinct values -- an api_key or token column is routinely UNIQUE, and
+		// a constant would fail the load on its second row. The salt only rises
+		// when the unique retry asks for another value.
+		if salt == 0 {
+			return "REDACTED"
+		}
+		return "REDACTED-" + hexs[:12]
 	case Email:
 		// 16 hex chars is 64 bits. At 10M rows the chance of two distinct
 		// addresses colliding is ~3e-6; the unique-constraint retry covers the
@@ -344,6 +352,7 @@ func NewUniqueSet() *UniqueSet { return &UniqueSet{seen: map[string]bool{}} }
 
 // Ensure calls gen with increasing salts until the value has not been used.
 func (u *UniqueSet) Ensure(gen func(salt int) (*string, error)) (*string, error) {
+	var prev *string
 	for salt := range 1000 {
 		v, err := gen(salt)
 		if err != nil {
@@ -356,8 +365,33 @@ func (u *UniqueSet) Ensure(gen func(salt int) (*string, error)) (*string, error)
 			u.seen[*v] = true
 			return v, nil
 		}
+		// A rule that ignores the salt cannot escape a collision, so spinning
+		// to 1000 only delays an error and hides its cause.
+		if prev != nil && *prev == *v {
+			return nil, errSaltInvariant
+		}
+		prev = v
 	}
 	return nil, fmt.Errorf("could not generate a unique masked value after 1000 attempts")
+}
+
+var errSaltInvariant = errors.New(
+	"this rule produces the same value for every row, so it cannot satisfy a unique constraint; " +
+		"use `secret` to replace the value instead")
+
+// SatisfiesUnique reports whether a rule can fill a unique column.
+//
+// `redact` cannot fill a NOT NULL one: it writes the same empty value into
+// every row, and no amount of salting changes that, so the load fails on the
+// second row. Caught here, before a table is read, rather than three minutes
+// into a run.
+func SatisfiesUnique(rule Rule, col catalog.Column) error {
+	if rule == Redact && col.NotNull {
+		return fmt.Errorf("%s is UNIQUE and NOT NULL: `redact` would write the same empty "+
+			"value into every row, which the constraint rejects. Use `secret` to replace "+
+			"the value while keeping it unique", col.Name)
+	}
+	return nil
 }
 
 // UniqueColumns returns the single-column unique constraints on a table. Only

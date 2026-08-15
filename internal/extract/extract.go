@@ -414,6 +414,13 @@ func (e *Extractor) streamTable(ctx context.Context, sink Sink, ref catalog.Ref,
 		if r := e.opt.Classifier.Rule(ref, name); r != mask.Keep {
 			rules[name] = r
 			if uniqueCols[name] {
+				col, _ := t.Column(name)
+				// Fail before reading a row: a rule that cannot satisfy the
+				// constraint fails the load either way, and it is far cheaper
+				// to say so now.
+				if err := mask.SatisfiesUnique(r, col); err != nil {
+					return 0, fmt.Errorf("extract: %s.%s: %w", ref, name, err)
+				}
 				uniques[name] = mask.NewUniqueSet()
 			}
 		}
