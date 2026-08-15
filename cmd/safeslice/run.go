@@ -490,13 +490,26 @@ func writeArtifacts(ctx context.Context, in artifactInput) (report.Result, error
 	res.Normalise() // the same fields the artifacts were rendered from
 	h.at(stageReported)
 	if !flagQuiet && !h.quiet() {
+		// Absolute, always. A relative path is only meaningful from the
+		// directory the run happened in, and the demo changes directory while
+		// it works -- so `open safeslice-output/report.html` was a command that
+		// failed for the person most likely to paste it.
 		ui.Section("Artifacts")
 		for _, p := range paths {
-			ui.Detail("%s", p)
+			ui.Detail("%s", absOr(p))
 		}
-		ui.NextStep("open %s", filepath.Join(in.dir, "report.html"))
+		ui.NextStep("open %s", absOr(filepath.Join(in.dir, "report.html")))
 	}
 	return res, nil
+}
+
+// absOr resolves a path for display, falling back to what it was given. A
+// path that cannot be resolved is still better printed than dropped.
+func absOr(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // describeFKs renders the relationships a slice followed, for the artifacts.

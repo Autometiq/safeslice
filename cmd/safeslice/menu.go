@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Autometiq/safeslice/internal/config"
 	"github.com/Autometiq/safeslice/internal/demo"
@@ -91,8 +92,34 @@ func demoFlow(ctx context.Context) error {
 	}
 
 	ui.Success("that is the whole workflow")
-	ui.Detail("The config it generated is in ./%s/safeslice.yaml — open it to see", dir)
-	ui.Detail("which columns were classified automatically and which were left to you.")
+
+	// Show the report rather than describing it. Someone who has just watched
+	// the pipeline run wants to see what it produced, and a path they have to
+	// reassemble from two relative fragments is a path nobody opens.
+	out := absOr(report.DefaultDir)
+	ui.Section("What it produced")
+	ui.Table([]string{"FILE", "WHAT IT IS"}, [][]string{
+		{"report.html", "the full run, formatted — opens from disk, no network"},
+		{"README.md", "the same thing in Markdown, for a ticket or a PR"},
+		{"summary.json", "machine-readable result, for CI"},
+		{"tables.csv", "per-table row counts and masked-column counts"},
+		{"masking-rules.yaml", "the rules that were applied"},
+	})
+	ui.Detail("")
+	ui.Detail("All five are in %s", out)
+	ui.Detail("The config it generated is in %s", absOr(config.DefaultPath))
+	ui.Detail("Open it to see which columns were classified automatically.")
+
+	html := filepath.Join(out, "report.html")
+	if flagNoOpen {
+		ui.NextStep("open %s", html)
+	} else if err := report.Open(html); err != nil {
+		ui.NextStep("open %s", html)
+	} else {
+		ui.Detail("")
+		ui.Detail("Opening the report in your browser (--no-open to stop this).")
+	}
+
 	showCommands()
 	ui.NextStep("safeslice demo stop   # remove the demo database when you are done")
 	return nil
