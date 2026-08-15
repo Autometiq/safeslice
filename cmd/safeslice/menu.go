@@ -19,62 +19,18 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
-
 	"github.com/Autometiq/safeslice/internal/config"
 	"github.com/Autometiq/safeslice/internal/demo"
 	"github.com/Autometiq/safeslice/internal/report"
 	"github.com/Autometiq/safeslice/internal/ui"
 )
 
-// Running `safeslice` with no arguments opens a guided menu rather than
-// printing usage.
+// The demo: a complete run against a database safeslice creates itself.
 //
-// The commands are the product and stay the interface for anyone scripting it,
-// but a first-time user faced with five commands and a config file has to read
-// documentation before anything happens. The menu carries them through one
-// working slice, and every step prints the command it just ran so they leave
-// knowing how to do it without the menu.
-
-func menuCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "menu",
-		Short:  "Guided walkthrough (also what runs when safeslice is given no arguments)",
-		Hidden: true,
-		RunE:   func(cmd *cobra.Command, _ []string) error { return runMenu(cmd.Context()) },
-	}
-}
-
-func runMenu(ctx context.Context) error {
-	ui.Splash(resolveVersion())
-
-	for {
-		// Two paths only. `--help` already lists the commands, and a menu entry
-		// that just prints help is a step between the user and a working slice.
-		choice := ui.Menu("What would you like to do?", []ui.Choice{
-			{Key: "1", Label: "Try it with demo data", Note: "throwaway database — nothing of yours is touched"},
-			{Key: "2", Label: "Slice my own database", Note: "pull a masked slice of a Postgres you already have"},
-			{Key: "q", Label: "Quit", Note: ""},
-		})
-
-		switch choice {
-		case "1":
-			if err := demoFlow(ctx); err != nil {
-				ui.Fatal(err)
-			}
-		case "2":
-			if err := ownFlow(ctx); err != nil {
-				ui.Fatal(err)
-			}
-		case "q", "":
-			return nil
-		}
-
-		if !ui.Confirm("\nBack to the menu?") {
-			return nil
-		}
-	}
-}
+// It exists because the fastest way to trust a tool that touches production is
+// to watch it work on something that is not production. Every step prints the
+// command it just ran, so the walkthrough teaches the CLI rather than replacing
+// it.
 
 // demoFlow runs a complete slice against a database safeslice creates itself.
 func demoFlow(ctx context.Context) error {
@@ -83,7 +39,7 @@ func demoFlow(ctx context.Context) error {
 	if err := demo.DockerAvailable(ctx); err != nil {
 		return ui.HintCmd(err,
 			"The demo runs PostgreSQL in a container. Install Docker Desktop and "+
-				"start it, or choose option 2 to use a database you already have.",
+				"start it, or point the wizard at a database you already have.",
 			"https://docs.docker.com/get-started/get-docker/")
 	}
 
@@ -168,91 +124,25 @@ func demoConfig(ctx context.Context) (*config.Config, error) {
 
 func maskedColumnsForDemo(cfg *config.Config) int { return len(cfg.Mask.Rules) }
 
-// ownFlow carries a real database through the whole workflow.
-//
-// It stops for one thing only: the columns the classifier could not judge.
-// Running a slice past those unreviewed is how personal data reaches a laptop,
-// so the confirmation is deliberate rather than a formality.
-func ownFlow(ctx context.Context) error {
-	ui.Stage(1, 5, "Connecting")
-	ui.Detail("Use a read replica if you have one. safeslice opens the source")
-	ui.Detail("read-only and never writes to it.")
-
-	src := ui.Ask("\nSource connection string:", os.Getenv("SAFESLICE_SOURCE"))
-	if src == "" {
-		return ui.Hint(fmt.Errorf("no source given"),
-			"A connection string looks like postgres://user:password@host:5432/dbname")
-	}
-
-	ui.Stage(2, 5, "Reading the schema")
-	ui.Detail("$ safeslice init --from %s", describe(src))
-	review, err := writeInitConfig(ctx, src, config.DefaultPath, []string{"public"}, "", true)
-	if err != nil {
-		return err
-	}
-
-	ui.Stage(3, 5, "Reviewing what could not be classified")
-	if len(review) == 0 {
-		ui.Success("every column was classified automatically")
-	} else {
-		ui.Warn("%d columns hold free text and need your decision:", len(review))
-		for _, c := range review {
-			ui.Detail("%s", c)
-		}
-		ui.Detail("")
-		ui.Detail("They are set to `keep`, which passes them through unchanged. Open")
-		ui.Detail("%s and change any that hold personal data to `redact`.", config.DefaultPath)
-		if !ui.Confirm("\nHave you reviewed them?") {
-			ui.Info("stopping here — nothing has been read from your tables")
-			ui.NextStep("$EDITOR %s", config.DefaultPath)
-			ui.NextStep("safeslice run --to \"postgres://localhost/myapp_dev\"")
-			return nil
-		}
-	}
-
-	cfg, err := config.Load(config.DefaultPath)
-	if err != nil {
-		return err
-	}
-
-	ui.Stage(4, 5, "Choosing a target")
-	ui.Detail("The target needs its schema already created by your own migrations.")
-	ui.Detail("safeslice copies rows, not table definitions.")
-	target := ui.Ask("\nTarget connection string:", "postgres://localhost/myapp_dev")
-	if target == "" {
-		return ui.Hint(fmt.Errorf("no target given"), "Name the local database to load into.")
-	}
-	if err := refuseSameDatabase(src, target); err != nil {
-		return err
-	}
-	cfg.Slice.Limit = ui.AskInt("How many rows from "+cfg.Slice.Root+"?", 1000)
-
-	if !ui.Confirm(fmt.Sprintf("\nLoad a masked slice into %s?", describe(target))) {
-		ui.Info("stopping here — nothing was written")
-		return nil
-	}
-
-	ui.Detail("$ safeslice run --to %s", describe(target))
-	ui.Stage(5, 5, "Verifying and writing the report")
-	if err := doRunReport(ctx, cfg, src, target, "", "", 0, report.DefaultDir); err != nil {
-		return err
-	}
-	showCommands()
-	return nil
-}
-
 // showCommands lists the CLI equivalents, printed once a guided run finishes so
-// the user leaves knowing how to repeat it without the menu.
+// the user leaves knowing how to repeat it without the wizard.
 func showCommands() {
-	ui.Section("The same thing without the menu")
+	ui.Section("The same thing without the wizard")
 	ui.Table([]string{"COMMAND", "PURPOSE"}, [][]string{
 		{"safeslice init", "read the schema, generate safeslice.yaml"},
 		{"safeslice plan", "show what a run would do; reads no table data"},
 		{"safeslice run", "extract, mask, and load into a target"},
 		{"safeslice verify", "audit a database for surviving personal data"},
+		{"safeslice report", "show and open the last run's report"},
 		{"safeslice demo", "start or stop the throwaway demo database"},
+		{"safeslice profiles", "list saved profiles and past runs"},
+		{"safeslice connections", "list saved connections"},
 	})
 	ui.Detail("")
 	ui.Detail("Every command takes --from, or reads SAFESLICE_SOURCE from the environment.")
+	ui.Detail("")
+	ui.Detail("For CI, the two that matter are:")
+	ui.Detail("  safeslice run --config safeslice.yaml --to \"$DATABASE_URL\"")
+	ui.Detail("  safeslice verify --target \"$DATABASE_URL\"")
 	ui.NextStep("safeslice <command> --help")
 }

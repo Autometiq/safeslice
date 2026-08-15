@@ -6,3 +6,8 @@
 slice.sql
 *-keys.db
 /.claude/
+# Wizard state and run artifacts. Nothing here holds a password, but it
+# describes your databases and belongs to a machine, not to the repository.
+/.safeslice/
+/safeslice-output/
+/safeslice-demo/

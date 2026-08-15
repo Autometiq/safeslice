@@ -144,6 +144,12 @@ type Result struct {
 	TotalRows int     `json:"total_rows"`
 	Rules     []Rule  `json:"masking_rules"`
 	Redacted  []Rule  `json:"redacted_columns"`
+	// Relationships are the foreign keys the slice followed, and Soft the
+	// column pairs that look like relationships but nothing enforces. The
+	// second list is the one that explains a slice somebody thinks is missing
+	// rows: safeslice cannot follow what the schema does not declare.
+	Relationships []string `json:"relationships,omitempty"`
+	Soft          []string `json:"unenforced_relationships,omitempty"`
 	// Unreviewed lists columns a human left as `keep` without judging them.
 	Unreviewed []string `json:"unreviewed_columns,omitempty"`
 
@@ -167,6 +173,8 @@ func (r *Result) Normalise() {
 	sort.Slice(r.Rules, func(i, j int) bool { return r.Rules[i].Column < r.Rules[j].Column })
 	sort.Slice(r.Redacted, func(i, j int) bool { return r.Redacted[i].Column < r.Redacted[j].Column })
 	sort.Strings(r.Unreviewed)
+	sort.Strings(r.Relationships)
+	sort.Strings(r.Soft)
 	if r.TotalRows == 0 {
 		for _, t := range r.Tables {
 			r.TotalRows += t.ExtractedRows
@@ -279,8 +287,28 @@ func readme(r Result) string {
 		p("\n")
 	}
 
-	p("## Connect\n\n```\n%s\n```\n\n", r.Target.URL())
-	p("```\nDATABASE_URL=%s\n```\n\n", r.Target.URL())
+	if len(r.Relationships) > 0 {
+		p("## Relationships\n\nThe slice followed these foreign keys:\n\n")
+		for _, rel := range r.Relationships {
+			p("- %s\n", rel)
+		}
+		p("\n")
+	}
+	if len(r.Soft) > 0 {
+		p("### Not enforced by the database\n\n")
+		p("These columns look like relationships but have no foreign key, so ")
+		p("safeslice could not follow them. Declare any that matter as ")
+		p("`virtual_keys` in safeslice.yaml.\n\n")
+		for _, s := range r.Soft {
+			p("- %s\n", s)
+		}
+		p("\n")
+	}
+
+	p("## Connect\n\n")
+	for _, s := range Snippets(r.Target) {
+		p("**%s**\n\n```\n%s\n```\n\n", s.Name, s.Code)
+	}
 
 	if len(r.Warnings) > 0 {
 		p("## Warnings\n\n")

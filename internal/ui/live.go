@@ -51,9 +51,17 @@ var spinFrames = func() []string {
 	return []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 }()
 
+// painter is whatever currently owns the bottom of the screen: a status line or
+// a step block. Finished output has to step around it, and only one of them may
+// be drawing at a time.
+type painter interface {
+	clear() // erase what is on screen
+	paint() // draw it again
+}
+
 var (
-	liveMu  sync.Mutex // guards writes to out and the fields of liveActive
-	liveOne *Live
+	liveMu sync.Mutex // guards writes to out and the fields of the active painter
+	active painter
 )
 
 // Live is a handle to the active status line.
@@ -77,7 +85,10 @@ func Start(format string, a ...any) *Live {
 	l.stop, l.done = make(chan struct{}), make(chan struct{})
 
 	liveMu.Lock()
-	liveOne = l
+	if active != nil {
+		active.clear()
+	}
+	active = l
 	fmt.Fprint(out, hideCursor)
 	l.render()
 	liveMu.Unlock()
@@ -96,7 +107,7 @@ func (l *Live) loop() {
 			return
 		case <-t.C:
 			liveMu.Lock()
-			if liveOne == l {
+			if active == painter(l) {
 				l.frame++
 				l.render()
 			}
@@ -104,6 +115,10 @@ func (l *Live) loop() {
 		}
 	}
 }
+
+// clear and paint implement painter. Callers must hold liveMu.
+func (l *Live) clear() { fmt.Fprint(out, clearLine) }
+func (l *Live) paint() { l.render() }
 
 // render draws the status line. Callers must hold liveMu.
 func (l *Live) render() {
@@ -124,7 +139,7 @@ func (l *Live) Detail(format string, a ...any) {
 	}
 	liveMu.Lock()
 	l.detail = fmt.Sprintf(format, a...)
-	if liveOne == l {
+	if active == painter(l) {
 		l.render()
 	}
 	liveMu.Unlock()
@@ -140,7 +155,7 @@ func (l *Live) Label(format string, a ...any) {
 	}
 	liveMu.Lock()
 	l.label = fmt.Sprintf(format, a...)
-	if liveOne == l {
+	if active == painter(l) {
 		l.render()
 	}
 	liveMu.Unlock()
@@ -160,11 +175,11 @@ func (l *Live) Stop() {
 		return
 	}
 	liveMu.Lock()
-	if liveOne != l {
+	if active != painter(l) {
 		liveMu.Unlock()
 		return
 	}
-	liveOne = nil
+	active = nil
 	liveMu.Unlock()
 
 	// Signalling outside the lock: loop takes liveMu on every tick, so holding
@@ -198,9 +213,9 @@ func RestoreCursor() {
 	}
 	liveMu.Lock()
 	defer liveMu.Unlock()
-	if liveOne != nil {
-		fmt.Fprint(out, clearLine)
-		liveOne = nil
+	if active != nil {
+		active.clear()
+		active = nil
 	}
 	fmt.Fprint(out, showCursor)
 }
@@ -210,12 +225,12 @@ func RestoreCursor() {
 func emit(s string) {
 	liveMu.Lock()
 	defer liveMu.Unlock()
-	if liveOne != nil {
-		fmt.Fprint(out, clearLine)
+	if active != nil {
+		active.clear()
 	}
 	fmt.Fprint(out, s)
-	if liveOne != nil {
-		liveOne.render()
+	if active != nil {
+		active.paint()
 	}
 }
 

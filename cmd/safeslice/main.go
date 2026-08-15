@@ -39,6 +39,8 @@ var (
 	flagSchemas []string
 	flagNoColor bool
 	flagQuiet   bool
+	flagNoOpen  bool
+	flagVerbose bool
 )
 
 func main() {
@@ -89,15 +91,15 @@ by ` + ui.Vendor + ` • ` + ui.VendorURL,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
-		// No arguments opens the guided menu. Printing usage to someone who has
-		// just installed the tool tells them what exists, not what to do.
-		RunE: func(cmd *cobra.Command, _ []string) error { return runMenu(cmd.Context()) },
+		// No arguments opens the wizard. Printing usage to someone who has just
+		// installed the tool tells them what exists, not what to do.
+		RunE: func(cmd *cobra.Command, _ []string) error { return runWizard(cmd.Context()) },
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			ui.SetPlain(flagNoColor)
 			// The banner is chrome. It has no place in generated shell
 			// completion scripts, and no place when the user asked for quiet.
-			if flagQuiet || isCompletion(cmd) || cmd.Name() == "safeslice" || cmd.Name() == "menu" {
-				return // the menu draws its own splash
+			if flagQuiet || isCompletion(cmd) || cmd.Name() == "safeslice" || cmd.Name() == "wizard" {
+				return // the wizard draws its own splash
 			}
 			ui.Banner(resolveVersion())
 		},
@@ -107,9 +109,25 @@ by ` + ui.Vendor + ` • ` + ui.VendorURL,
 	pf.StringSliceVar(&flagSchemas, "schema", nil, "schema to include (repeatable; overrides config)")
 	pf.BoolVar(&flagNoColor, "no-color", false, "disable colour and box drawing")
 	pf.BoolVarP(&flagQuiet, "quiet", "q", false, "suppress the banner and footer")
+	pf.BoolVar(&flagNoOpen, "no-open", false, "never open the generated report in a browser")
+	pf.BoolVarP(&flagVerbose, "verbose", "v", false,
+		"show the full log instead of the wizard's progress display")
 
-	cmd.AddCommand(initCmd(), planCmd(), runCmd(), verifyCmd(), demoCmd(), menuCmd())
+	cmd.AddCommand(initCmd(), planCmd(), runCmd(), verifyCmd(), demoCmd(),
+		wizardCmd(), reportCmd(), connectionsCmd(), profilesCmd())
 	return cmd
+}
+
+// wizardCmd names the default behaviour, so it can be found in --help and run
+// explicitly from a script that has other arguments.
+func wizardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "wizard",
+		Aliases: []string{"menu"},
+		Short:   "Guided walkthrough (also what runs when safeslice is given no arguments)",
+		Args:    cobra.NoArgs,
+		RunE:    func(cmd *cobra.Command, _ []string) error { return runWizard(cmd.Context()) },
+	}
 }
 
 func isCompletion(cmd *cobra.Command) bool {

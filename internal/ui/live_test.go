@@ -48,7 +48,7 @@ func live(t *testing.T, isPlain bool) *syncBuf {
 	out, plain = buf, isPlain
 	t.Cleanup(func() {
 		liveMu.Lock()
-		liveOne = nil
+		active = nil
 		liveMu.Unlock()
 		out, plain = oldOut, oldPlain
 	})
@@ -140,9 +140,9 @@ func TestRestoreCursorClearsAnActiveLine(t *testing.T) {
 		t.Error("cursor not restored")
 	}
 	liveMu.Lock()
-	active := liveOne
+	still := active
 	liveMu.Unlock()
-	if active != nil {
+	if still != nil {
 		t.Error("status line still considered active after restore")
 	}
 }
