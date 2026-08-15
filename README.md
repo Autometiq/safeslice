@@ -32,32 +32,58 @@ You cannot put production data on a laptop. A `pg_dump` does not know which colu
 
 ## Install
 
+**macOS / Linux** — detects your platform:
+
+```bash
+curl -sSfL "https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz
+sudo mv safeslice /usr/local/bin/
+```
+
+**Windows** — PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_windows_amd64.zip -OutFile safeslice.zip
+Expand-Archive safeslice.zip -DestinationPath $env:LOCALAPPDATA\Programs\safeslice -Force
+$env:PATH += ";$env:LOCALAPPDATA\Programs\safeslice"
+```
+
+**Go toolchain** — any platform:
+
 ```bash
 go install github.com/Autometiq/safeslice/cmd/safeslice@latest
 ```
 
+Then check it:
+
+```bash
+safeslice --version
+```
+
 <details>
-<summary>Other ways to install</summary>
+<summary>Docker, Linux packages, and verifying your download</summary>
 
 <br />
 
-Prebuilt binaries, Docker images and Linux packages are produced by [goreleaser](.goreleaser.yaml) for Linux, macOS and Windows on amd64 and arm64 whenever a `v*` tag is pushed:
-
 ```bash
-# Binary (once a release is published)
-curl -sSfL https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_linux_amd64.tar.gz | tar xz
-sudo mv safeslice /usr/local/bin/
-
-# Docker
 docker run --rm ghcr.io/autometiq/safeslice:latest --help
-
-# Debian / Ubuntu · RHEL / Fedora · Alpine
-sudo dpkg -i safeslice_amd64.deb
-sudo rpm  -i safeslice_amd64.rpm
-sudo apk add --allow-untrusted safeslice_amd64.apk
 ```
 
-One static binary. No runtime, no server, no control plane. `CGO_ENABLED=0`, including the SQLite key store, so there is no libc dependency either.
+```bash
+sudo dpkg -i safeslice_amd64.deb   # Debian / Ubuntu
+sudo rpm  -i safeslice_amd64.rpm   # RHEL / Fedora / SUSE
+sudo apk add --allow-untrusted safeslice_amd64.apk   # Alpine
+```
+
+Every release ships a `checksums.txt`. If you are putting this on a machine that touches production, verify what you downloaded:
+
+```bash
+curl -sSfLO https://github.com/Autometiq/safeslice/releases/latest/download/checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
+
+Builds are produced by [goreleaser](.goreleaser.yaml) in GitHub Actions from a tagged commit — Linux, macOS and Windows on amd64 and arm64 — so the binary you download corresponds to source you can read.
+
+One static file. No runtime, no server, no control plane. `CGO_ENABLED=0` including the SQLite key store, so there is no libc dependency either.
 
 </details>
 

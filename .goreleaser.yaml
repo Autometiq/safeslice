@@ -74,14 +74,22 @@ changelog:
       order: 999
   filters:
     exclude:
+      # Both forms of every prefix. `ci:` and `ci(release):` are the same kind
+      # of commit, and only excluding the first puts plumbing in the notes.
       - '^docs:'
       - '^docs\('
       - '^test:'
       - '^test\('
       - '^chore:'
+      - '^chore\('
       - '^ci:'
+      - '^ci\('
       - '^style:'
+      - '^style\('
       - '^refactor:'
+      - '^refactor\('
+      - '^build:'
+      - '^build\('
       - '^wip'
       - 'Merge pull request'
       - 'Merge branch'
