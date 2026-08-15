@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.png" alt="safeslice" width="280" />
+<img src="logo.webp" alt="safeslice" width="280" />
 
 <br />
 
@@ -90,6 +90,22 @@ On Windows, `go install` places the binary in `$env:USERPROFILE\go\bin`.
 <br />
 
 ## 🚀 Quickstart
+
+**The short version.** Run it with no arguments and answer the questions:
+
+```bash
+safeslice
+```
+
+The wizard connects to your source, reads the schema, asks about the columns it
+cannot judge, shows you exactly what the slice contains **before** anything
+moves, loads it, verifies the result, and writes the report. It ends with a
+connection string you can paste into your app.
+
+Everything below is the same workflow as individual commands, which is what CI
+and scripts should use.
+
+<br />
 
 **1. Generate a config from your live schema.**
 
@@ -222,10 +238,23 @@ Rules: `keep` · `redact` · `secret` · `email` · `phone` · `govid` · `first
 
 | Command | Purpose |
 |---|---|
+| `safeslice` | Guided wizard: source → decisions → review → load → verify → report |
 | `safeslice init` | Introspect the schema and generate a reviewable starting config |
 | `safeslice plan` | Show exactly what a run would do — reads no table data |
 | `safeslice run` | Extract, mask in transit, load into a target or write SQL |
 | `safeslice verify` | Audit a database for surviving personal data; non-zero exit on findings |
+| `safeslice report` | Show and open the report from the last run |
+| `safeslice profiles` | List saved wizard profiles, or past runs with `--history` |
+| `safeslice connections` | List saved connections (never passwords) |
+| `safeslice demo` | Start or stop a throwaway database to try the whole thing on |
+
+The wizard writes `safeslice.yaml` as it goes, so anything you do interactively
+is repeatable non-interactively:
+
+```bash
+safeslice run --config safeslice.yaml --to "$DATABASE_URL"
+safeslice verify --target "$DATABASE_URL"
+```
 
 <br />
 
