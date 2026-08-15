@@ -53,15 +53,83 @@ dockers_v2:
 checksum:
   name_template: checksums.txt
 
+# The release notes are generated, not written by hand. A release that needs a
+# human to remember to describe it is a release that eventually ships with an
+# empty body -- so the changelog is grouped by conventional-commit type and the
+# install instructions are templated from the tag.
 changelog:
   sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: Other changes
+      order: 999
   filters:
-    exclude: ['^docs:', '^test:', '^chore:', '^ci:']
+    exclude:
+      - '^docs:'
+      - '^docs\('
+      - '^test:'
+      - '^test\('
+      - '^chore:'
+      - '^ci:'
+      - '^style:'
+      - '^refactor:'
+      - '^wip'
+      - 'Merge pull request'
+      - 'Merge branch'
+      - 'Merge:'
 
 release:
+  name_template: "{{ .Tag }}"
+  # Idempotent: re-running a failed release replaces its artifacts instead of
+  # erroring on the ones that already uploaded.
+  mode: replace
+  header: |
+    Run `safeslice` with no arguments and answer the questions. It reads the
+    schema, asks about the columns it cannot classify, shows exactly what the
+    slice contains before anything moves, loads it, verifies the result and
+    writes the report.
+
+    `init`, `plan`, `run`, `verify` and `demo` remain unchanged for CI.
   footer: |
     ## Install
 
     ```bash
     go install github.com/Autometiq/safeslice/cmd/safeslice@{{ .Tag }}
     ```
+
+    Or take a binary from below — Linux, macOS and Windows on amd64 and arm64.
+    One static file: no runtime, no libc dependency.
+
+    ```bash
+    curl -sSfL https://github.com/Autometiq/safeslice/releases/download/{{ .Tag }}/safeslice_linux_amd64.tar.gz | tar xz
+    sudo mv safeslice /usr/local/bin/
+    safeslice --version
+    ```
+
+    Verify what you downloaded:
+
+    ```bash
+    curl -sSfLO https://github.com/Autometiq/safeslice/releases/download/{{ .Tag }}/checksums.txt
+    sha256sum -c checksums.txt --ignore-missing
+    ```
+
+    Docker, and Debian / RHEL / Alpine packages:
+
+    ```bash
+    docker run --rm ghcr.io/autometiq/safeslice:{{ .Version }} --help
+    sudo dpkg -i safeslice_amd64.deb   # or rpm -i / apk add --allow-untrusted
+    ```
+
+    ---
+
+    Tested against PostgreSQL 13 and 17 in CI. Safeslice opens the source
+    read-only and never writes to it.
