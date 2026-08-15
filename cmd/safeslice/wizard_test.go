@@ -26,6 +26,7 @@ import (
 	"github.com/Autometiq/safeslice/internal/config"
 	"github.com/Autometiq/safeslice/internal/mask"
 	"github.com/Autometiq/safeslice/internal/profile"
+	"github.com/Autometiq/safeslice/internal/report"
 	"github.com/Autometiq/safeslice/internal/ui"
 )
 
@@ -323,5 +324,34 @@ func TestSoftRelationshipsReachTheReport(t *testing.T) {
 		RefColumns: []string{"id"}, Virtual: true}}
 	if lines := describeFKs(fks); len(lines) != 1 || !strings.Contains(lines[0], "[virtual]") {
 		t.Errorf("describeFKs = %v, want the virtual marker", lines)
+	}
+}
+
+func TestResultsScreenExitsCleanly(t *testing.T) {
+	// "Done" is the last option. Choosing it must leave without opening
+	// anything -- a test that launches a browser is a test nobody runs twice.
+	buf := script(t, "8\n")
+	w := newTestWizard(t)
+	w.results(report.Result{Target: report.Endpoint{Host: "localhost", Port: "5432", Database: "shop_dev"}})
+
+	got := buf.String()
+	if !strings.Contains(got, w.reportDir) {
+		t.Errorf("the results screen never said where the artifacts are:\n%s", got)
+	}
+}
+
+func TestResultsScreenOffersEveryArtifact(t *testing.T) {
+	buf := script(t, "8\n")
+	w := newTestWizard(t)
+	w.results(report.Result{Target: report.Endpoint{Host: "localhost", Database: "shop_dev"}})
+
+	got := buf.String()
+	for _, want := range []string{
+		"HTML report", "output folder", "connection string",
+		"README.md", "tables.csv", "summary.json", "masking-rules.yaml",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("results screen is missing %q:\n%s", want, got)
+		}
 	}
 }

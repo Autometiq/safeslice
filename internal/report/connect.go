@@ -17,7 +17,9 @@ package report
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // What to do with the database once it exists.
@@ -67,12 +69,17 @@ func portOr(e Endpoint) string {
 	return e.Port
 }
 
-// Open shows a file in the user's browser.
+// Open shows a file with whatever the system associates with it: the browser
+// for HTML, an editor for Markdown, a spreadsheet for CSV.
 //
 // Best effort by design: a headless server or a locked-down laptop has nothing
 // to open it with, and that is not a reason to fail a run that succeeded. The
 // path is printed either way.
 func Open(path string) error {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs // relative paths break once the handler changes directory
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
@@ -89,4 +96,50 @@ func Open(path string) error {
 	}
 	go cmd.Wait() //nolint:errcheck // reap the child; the result is not interesting
 	return nil
+}
+
+// Reveal opens a directory in the system file manager.
+func Reveal(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err == nil {
+		dir = abs
+	}
+	switch runtime.GOOS {
+	case "windows":
+		// explorer.exe exits non-zero even when it succeeds, so the error is
+		// deliberately not checked -- reporting a failure that did not happen
+		// is worse than reporting nothing.
+		cmd := exec.Command("explorer", dir)
+		_ = cmd.Start()
+		go cmd.Wait() //nolint:errcheck
+		return nil
+	default:
+		return Open(dir)
+	}
+}
+
+// Clipboard copies text using whatever the platform provides.
+//
+// Reports whether it worked, because the caller has to print the value instead
+// when it did not: a "copied!" message that copied nothing is worse than no
+// message at all. Linux has no clipboard without a display server, which is
+// exactly the headless case where the printed string is what matters.
+func Clipboard(text string) bool {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("clip")
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	default:
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		} else if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else {
+			return false
+		}
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run() == nil
 }

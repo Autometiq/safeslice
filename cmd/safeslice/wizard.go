@@ -106,7 +106,12 @@ func runWizard(ctx context.Context) error {
 		var err error
 		switch choice {
 		case 0:
-			err = createFlow(ctx)
+			// A finished run ends at its own results screen. Asking "back to
+			// the menu?" after that sends someone who has just got what they
+			// came for back to a list of things they no longer need.
+			if err = createFlow(ctx); err == nil {
+				return nil
+			}
 		case 1:
 			err = inspectFlow(ctx)
 		case 2:
@@ -1281,21 +1286,78 @@ func (w *wizard) finish(res report.Result) {
 	ui.Detail("")
 	ui.Detail("Prisma, Rails, Django and Node.js snippets are in the README.")
 
-	ui.Section("Artifacts")
-	for _, name := range []string{"README.md", "report.html", "summary.json", "tables.csv", "masking-rules.yaml"} {
-		ui.Detail("%s", filepath.Join(w.reportDir, name))
-	}
-	htmlPath := filepath.Join(w.reportDir, "report.html")
-	if flagNoOpen {
-		ui.NextStep("open %s", htmlPath)
-	} else if err := report.Open(htmlPath); err != nil {
-		ui.NextStep("open %s", htmlPath)
-	} else {
-		ui.Detail("opening the report in your browser (--no-open to stop this)")
+	// The report is the thing worth looking at, so it opens on its own.
+	htmlPath := absOr(filepath.Join(w.reportDir, "report.html"))
+	if !flagNoOpen {
+		if err := report.Open(htmlPath); err == nil {
+			ui.Detail("")
+			ui.Detail("Opening the report in your browser (--no-open to stop this).")
+		}
 	}
 
 	w.record(res)
 	w.offerProfile()
+	w.results(res)
+}
+
+// results is the last screen: everything the run produced, one keystroke away.
+//
+// Printing five paths and trusting the reader to paste one into the right
+// program is how a good report goes unread. This opens them instead, and stays
+// until the reader is done rather than dropping them back at the main menu to
+// find their own way out.
+func (w *wizard) results(res report.Result) {
+	type artifact struct {
+		label, note, file string
+	}
+	files := []artifact{
+		{"Open the HTML report", "the full run, formatted", "report.html"},
+		{"Open the output folder", w.reportDir, ""},
+		{"Copy the connection string", res.Target.URL(), "-"},
+		{"Open README.md", "the same summary in Markdown", "README.md"},
+		{"Open tables.csv", "row counts per table", "tables.csv"},
+		{"Open summary.json", "machine-readable, for CI", "summary.json"},
+		{"Open masking-rules.yaml", "the rules that were applied", "masking-rules.yaml"},
+	}
+
+	opts := make([]ui.Option, 0, len(files)+1)
+	for _, f := range files {
+		opts = append(opts, ui.Option{Label: f.label, Note: f.note})
+	}
+	opts = append(opts, ui.Option{Label: "Done", Note: "everything is on disk; nothing else to run"})
+
+	for {
+		i := ui.Select("", opts, 0)
+		if i < 0 || i == len(files) {
+			ui.Detail("")
+			ui.Detail("Everything is in %s", absOr(w.reportDir))
+			ui.Footer()
+			return
+		}
+		f := files[i]
+		switch {
+		case f.file == "":
+			if err := report.Reveal(w.reportDir); err != nil {
+				ui.Warn("could not open the folder: %s", err)
+				ui.Detail("%s", absOr(w.reportDir))
+			}
+		case f.file == "-":
+			url := res.Target.URL()
+			if report.Clipboard(url) {
+				ui.Success("copied  %s", url)
+			} else {
+				// No clipboard on a headless box; printing it is the fallback
+				// that always works.
+				ui.Detail("%s", url)
+			}
+		default:
+			path := absOr(filepath.Join(w.reportDir, f.file))
+			if err := report.Open(path); err != nil {
+				ui.Warn("could not open it: %s", err)
+				ui.Detail("%s", path)
+			}
+		}
+	}
 }
 
 // record appends the run to the project history: what went where, and whether
