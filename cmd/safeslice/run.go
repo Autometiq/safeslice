@@ -31,6 +31,7 @@ import (
 	"github.com/Autometiq/safeslice/internal/extract"
 	"github.com/Autometiq/safeslice/internal/keyset"
 	"github.com/Autometiq/safeslice/internal/load"
+	"github.com/Autometiq/safeslice/internal/report"
 	"github.com/Autometiq/safeslice/internal/sink"
 	"github.com/Autometiq/safeslice/internal/ui"
 )
@@ -47,6 +48,8 @@ func runCmd() *cobra.Command {
 		childLimit int
 		keysPath   string
 		seed       string
+		reportDir  string
+		noReport   bool
 	)
 	cmd := &cobra.Command{
 		Use:     "run",
@@ -87,7 +90,11 @@ is written to it and every table is read from the same consistent snapshot.`,
 					"Generate a config that picks one for you, or pass --table.",
 					"safeslice init")
 			}
-			return doRun(cmd.Context(), cfg, dsn, to, out, keysPath, childLimit)
+			dir := reportDir
+			if noReport {
+				dir = ""
+			}
+			return doRunReport(cmd.Context(), cfg, dsn, to, out, keysPath, childLimit, dir)
 		},
 	}
 	f := cmd.Flags()
@@ -101,10 +108,18 @@ is written to it and every table is read from the same consistent snapshot.`,
 	f.IntVar(&childLimit, "child-limit", 0, "cap on child rows pulled per batch (default 100000)")
 	f.StringVar(&keysPath, "keys", "", "key-set file to keep (enables resume); default is a temp file")
 	f.StringVar(&seed, "seed", "", "masking seed; the same seed always produces the same fakes")
+	f.StringVar(&reportDir, "report", report.DefaultDir, "directory for the generated README, HTML report and summaries")
+	f.BoolVar(&noReport, "no-report", false, "skip generating artifacts")
 	return cmd
 }
 
+// doRun keeps the original signature so the guided flows and any other caller
+// are unaffected; reporting is layered on by doRunReport.
 func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath string, childLimit int) error {
+	return doRunReport(ctx, cfg, dsn, to, out, keysPath, childLimit, "")
+}
+
+func doRunReport(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath string, childLimit int, reportDir string) error {
 	started := time.Now()
 	conn, err := connectSource(ctx, dsn)
 	if err != nil {
@@ -149,6 +164,7 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 	defer cleanup()
 
 	total, tables := 0, 0
+	perTable := map[string]int{}
 	var live *ui.Live
 	extractStart := time.Now()
 	opt := extract.Options{
@@ -170,6 +186,7 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 		Progress: func(ref catalog.Ref, rows int) {
 			total += rows
 			tables++
+			perTable[ref.String()] = rows
 			ui.Step(rows, ref.String())
 		},
 	}
@@ -221,11 +238,118 @@ func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath strin
 	}
 	if !flagQuiet {
 		ui.Summary(stats)
-		if to != "" {
+	}
+
+	if reportDir == "" {
+		if !flagQuiet && to != "" {
 			ui.NextStep("safeslice verify --target %q", to)
 		}
+		return nil
+	}
+	return writeArtifacts(ctx, artifactInput{
+		cfg: cfg, cat: cat, source: dsn, target: to, outFile: out,
+		perTable: perTable, total: total, duration: time.Since(started),
+		warnings: warnings(), dir: reportDir,
+	})
+}
+
+type artifactInput struct {
+	cfg      *config.Config
+	cat      *catalog.Catalog
+	source   string
+	target   string
+	outFile  string
+	perTable map[string]int
+	total    int
+	duration time.Duration
+	warnings []string
+	dir      string
+}
+
+// writeArtifacts verifies the loaded database and writes the README, HTML
+// report, JSON summary, CSV and rules file.
+//
+// Verification runs here rather than being left to the user: a report that omits
+// it would imply the slice was checked when it was not.
+func writeArtifacts(ctx context.Context, in artifactInput) error {
+	rules, redacted, unreviewed := maskingRules(in.cat, in.cfg)
+	est := sourceRowEstimates(in.cat)
+
+	var tables []report.Table
+	for name, rows := range in.perTable {
+		masked := 0
+		for _, r := range rules {
+			if strings.HasPrefix(r.Column, shortName(name)+".") {
+				masked++
+			}
+		}
+		tables = append(tables, report.Table{
+			Name: name, SourceRows: est[name], ExtractedRows: rows, MaskedColumns: masked,
+		})
+	}
+
+	res := report.Result{
+		Version:    resolveVersion(),
+		Duration:   in.duration,
+		Source:     report.Redact(in.source),
+		RootTable:  in.cfg.Root().String(),
+		Where:      in.cfg.Slice.Where,
+		ChildDepth: in.cfg.Slice.ChildDepth,
+		Seed:       in.cfg.Mask.Seed,
+		Tables:     tables,
+		TotalRows:  in.total,
+		Rules:      rules,
+		Redacted:   redacted,
+		Unreviewed: unreviewed,
+		Warnings:   in.warnings,
+	}
+	if in.target != "" {
+		res.Target = report.Redact(in.target)
+	} else {
+		res.Target = report.Endpoint{Database: in.outFile}
+	}
+
+	if in.target != "" {
+		live := ui.Start("verifying the loaded database")
+		findings, err := scanTarget(ctx, in.target)
+		live.Stop()
+		switch {
+		case err != nil:
+			res.Warnings = append(res.Warnings, "verification could not run: "+err.Error())
+		default:
+			res.Verification = report.Verification{Ran: true, Passed: len(findings) == 0, Findings: findings}
+			if len(findings) == 0 {
+				ui.Success("privacy scan found no personal data in the sampled rows")
+			} else {
+				ui.Warn("privacy scan flagged %d columns", len(findings))
+				for _, f := range findings {
+					ui.Detail("%s", f)
+				}
+			}
+		}
+	}
+
+	paths, err := report.Write(in.dir, res)
+	if err != nil {
+		return err
+	}
+	if !flagQuiet {
+		ui.Section("Artifacts")
+		for _, p := range paths {
+			ui.Detail("%s", p)
+		}
+		ui.NextStep("open %s", filepath.Join(in.dir, "report.html"))
 	}
 	return nil
+}
+
+// shortName drops the schema qualifier, because masking rules are keyed on the
+// bare table name.
+func shortName(qualified string) string {
+	if i := strings.IndexByte(qualified, '.'); i >= 0 {
+		return qualified[i+1:]
+	}
+	return qualified
 }
 
 // hintLoadFailure turns the two failures users actually hit into instructions.

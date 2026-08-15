@@ -27,6 +27,7 @@ import (
 	"github.com/Autometiq/safeslice/internal/graph"
 	"github.com/Autometiq/safeslice/internal/load"
 	"github.com/Autometiq/safeslice/internal/mask"
+	"github.com/Autometiq/safeslice/internal/report"
 	"github.com/Autometiq/safeslice/internal/ui"
 )
 
@@ -69,7 +70,7 @@ It reads catalog metadata only. No table data is fetched.`,
 			if err != nil {
 				return err
 			}
-			return report(cat, cfg)
+			return renderPlan(cat, cfg)
 		},
 	}
 	f := cmd.Flags()
@@ -102,7 +103,7 @@ func applyOverrides(cfg *config.Config, schemas []string, table, where string, l
 	}
 }
 
-func report(cat *catalog.Catalog, cfg *config.Config) error {
+func renderPlan(cat *catalog.Catalog, cfg *config.Config) error {
 	virtual := cfg.FKs()
 	g := graph.New(cat, virtual)
 	refs := cat.Refs()
@@ -296,4 +297,57 @@ func reportMasking(cat *catalog.Catalog, cfg *config.Config, refs []catalog.Ref)
 	// Fail closed. A column nobody classified is the one that leaks.
 	return fmt.Errorf("strict mode: classify these columns in %s (use `keep` if they hold no personal data), "+
 		"or set mask.strict: false", config.DefaultPath)
+}
+
+// maskingRules describes what a run will transform, split the way the report
+// presents it: replacements, redactions, and columns nobody judged.
+func maskingRules(cat *catalog.Catalog, cfg *config.Config) (rules, redacted []report.Rule, unreviewed []string) {
+	cl := cfg.Classifier()
+	for _, ref := range cat.Refs() {
+		t, ok := cat.Table(ref)
+		if !ok || t.Partition {
+			continue // counted once, on the parent
+		}
+		keys := cat.KeyColumns(ref)
+		for _, col := range t.Columns {
+			if keys[col.Name] || !col.Insertable() {
+				continue
+			}
+			name := ref.Name + "." + col.Name
+			switch r := cl.Rule(ref, col.Name); r {
+			case mask.Keep:
+			case mask.Redact:
+				redacted = append(redacted, report.Rule{Column: name, Rule: string(r)})
+			default:
+				rules = append(rules, report.Rule{Column: name, Rule: string(r)})
+			}
+		}
+		// Columns left as `keep` without a human deciding are the leak risk, so
+		// the artifacts name them explicitly.
+		for _, c := range cl.Unclassified(t, keys) {
+			unreviewed = append(unreviewed, ref.Name+"."+c)
+		}
+	}
+	return rules, redacted, unreviewed
+}
+
+// sourceRowEstimates reports each table's approximate size, for context in the
+// report. reltuples is an estimate maintained by ANALYZE, not a count.
+func sourceRowEstimates(cat *catalog.Catalog) map[string]int64 {
+	out := map[string]int64{}
+	for _, ref := range cat.Refs() {
+		t, ok := cat.Table(ref)
+		if !ok {
+			continue
+		}
+		if t.Partition {
+			// A partitioned parent's own reltuples is empty -- the rows live in
+			// its partitions. Reporting 0 against a table holding twelve
+			// thousand rows is worse than reporting nothing.
+			out[t.Parent.String()] += t.EstRows
+			continue
+		}
+		out[ref.String()] += t.EstRows
+	}
+	return out
 }

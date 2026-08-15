@@ -23,6 +23,7 @@ import (
 
 	"github.com/Autometiq/safeslice/internal/config"
 	"github.com/Autometiq/safeslice/internal/demo"
+	"github.com/Autometiq/safeslice/internal/report"
 	"github.com/Autometiq/safeslice/internal/ui"
 )
 
@@ -125,13 +126,11 @@ func demoFlow(ctx context.Context) error {
 
 	ui.Stage(3, 4, "Slicing and masking")
 	ui.Detail("$ safeslice run --to %s", demo.TargetDSN())
-	if err := doRun(ctx, cfg, demo.SourceDSN(), demo.TargetDSN(), "", "", 0); err != nil {
-		return err
-	}
-
-	ui.Stage(4, 4, "Proving nothing leaked")
-	ui.Detail("$ safeslice verify --target %s", demo.TargetDSN())
-	if err := doVerify(ctx, demo.TargetDSN(), 1000, nil); err != nil {
+	// Reporting runs verification itself and writes the artifacts, so the
+	// walkthrough does not ask the user to run anything afterwards.
+	ui.Stage(4, 4, "Verifying and writing the report")
+	if err := doRunReport(ctx, cfg, demo.SourceDSN(), demo.TargetDSN(), "", "", 0,
+		report.DefaultDir); err != nil {
 		return err
 	}
 
@@ -234,13 +233,8 @@ func ownFlow(ctx context.Context) error {
 	}
 
 	ui.Detail("$ safeslice run --to %s", describe(target))
-	if err := doRun(ctx, cfg, src, target, "", "", 0); err != nil {
-		return err
-	}
-
-	ui.Stage(5, 5, "Proving nothing leaked")
-	ui.Detail("$ safeslice verify --target %s", describe(target))
-	if err := doVerify(ctx, target, 1000, nil); err != nil {
+	ui.Stage(5, 5, "Verifying and writing the report")
+	if err := doRunReport(ctx, cfg, src, target, "", "", 0, report.DefaultDir); err != nil {
 		return err
 	}
 	showCommands()

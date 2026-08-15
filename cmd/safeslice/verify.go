@@ -99,3 +99,34 @@ func doVerify(ctx context.Context, target string, sample int, ignore []string) e
 		"Add a rule for each in safeslice.yaml, then run again. If a match is a "+
 			"false positive, exclude it with --ignore table.column.")
 }
+
+// scanTarget audits a database and returns the findings as readable lines.
+//
+// Shared with the report writer, which must not simply omit verification: an
+// artifact that leaves it out implies the slice was checked when it was not.
+func scanTarget(ctx context.Context, target string) ([]string, error) {
+	conn, err := pgx.Connect(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(context.Background())
+
+	schemas := flagSchemas
+	if len(schemas) == 0 {
+		schemas = []string{"public"}
+	}
+	cat, err := catalog.Load(ctx, conn, schemas)
+	if err != nil {
+		return nil, err
+	}
+	findings, err := verify.Scan(ctx, conn, cat, verify.Options{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, fmt.Sprintf("%s.%s — %d rows look like %s",
+			f.Table.Name, f.Column, f.Matches, f.Kind))
+	}
+	return out, nil
+}
