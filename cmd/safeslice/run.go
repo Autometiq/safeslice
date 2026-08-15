@@ -29,6 +29,7 @@ import (
 	"github.com/Autometiq/safeslice/internal/catalog"
 	"github.com/Autometiq/safeslice/internal/config"
 	"github.com/Autometiq/safeslice/internal/extract"
+	"github.com/Autometiq/safeslice/internal/graph"
 	"github.com/Autometiq/safeslice/internal/keyset"
 	"github.com/Autometiq/safeslice/internal/load"
 	"github.com/Autometiq/safeslice/internal/report"
@@ -38,18 +39,19 @@ import (
 
 func runCmd() *cobra.Command {
 	var (
-		from       string
-		to         string
-		out        string
-		table      string
-		where      string
-		limit      int
-		childDepth int
-		childLimit int
-		keysPath   string
-		seed       string
-		reportDir  string
-		noReport   bool
+		from        string
+		to          string
+		out         string
+		table       string
+		where       string
+		limit       int
+		childDepth  int
+		childLimit  int
+		keysPath    string
+		seed        string
+		reportDir   string
+		noReport    bool
+		interactive bool
 	)
 	cmd := &cobra.Command{
 		Use:     "run",
@@ -61,6 +63,9 @@ either loads it into a target database or writes SQL to a file.
 The source is opened read-only inside a REPEATABLE READ transaction, so nothing
 is written to it and every table is read from the same consistent snapshot.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if interactive {
+				return createFlow(cmd.Context())
+			}
 			cfg, err := config.Load(flagConfig)
 			if err != nil {
 				return err
@@ -110,41 +115,126 @@ is written to it and every table is read from the same consistent snapshot.`,
 	f.StringVar(&seed, "seed", "", "masking seed; the same seed always produces the same fakes")
 	f.StringVar(&reportDir, "report", report.DefaultDir, "directory for the generated README, HTML report and summaries")
 	f.BoolVar(&noReport, "no-report", false, "skip generating artifacts")
+	f.BoolVarP(&interactive, "interactive", "i", false,
+		"ask for anything missing instead of failing (same as running `safeslice`)")
 	return cmd
 }
 
-// doRun keeps the original signature so the guided flows and any other caller
-// are unaffected; reporting is layered on by doRunReport.
-func doRun(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath string, childLimit int) error {
-	return doRunReport(ctx, cfg, dsn, to, out, keysPath, childLimit, "")
+// runStage names a point in the pipeline. The wizard maps these onto its
+// progress checklist; the CLI ignores them and prints its own output.
+type runStage int
+
+const (
+	stageConnected runStage = iota
+	stageSchema
+	stageRelationships
+	stageSelected
+	stageExtracted
+	stageLoaded
+	stageVerified
+	stageReported
+)
+
+// runHooks lets the wizard drive the same pipeline the CLI uses, rather than
+// growing a second implementation of it. Every field is optional, and a nil
+// runHooks leaves the CLI's behaviour exactly as it was.
+type runHooks struct {
+	// stage reports progress. When set, the pipeline prints no chrome of its
+	// own: the caller owns the display.
+	stage func(runStage)
+	// detail reports a line of progress within the current stage.
+	detail func(string)
+	// rows reports streaming progress against the row count the walk selected,
+	// which is what makes a progress bar honest rather than decorative.
+	rows func(done, total int)
+	// confirm runs after the foreign-key walk and before any row is read or
+	// written, with the exact row count per table. Returning an error aborts
+	// the run with nothing written to the target.
+	confirm func(counts map[string]int, total int) error
+	// verbose keeps the pipeline's own output even though a caller is
+	// listening: --verbose in the wizard, where the tidy checklist is exactly
+	// what you do not want while debugging.
+	verbose bool
+}
+
+// quiet reports whether the caller has taken over the display.
+func (h *runHooks) quiet() bool { return h != nil && !h.verbose }
+
+func (h *runHooks) at(s runStage) {
+	if h != nil && h.stage != nil {
+		h.stage(s)
+	}
+}
+
+func (h *runHooks) say(format string, a ...any) {
+	if h != nil && h.detail != nil {
+		h.detail(fmt.Sprintf(format, a...))
+	}
+}
+
+func (h *runHooks) moved(done, total int) {
+	if h != nil && h.rows != nil {
+		h.rows(done, total)
+	}
+}
+
+// runRequest is one slice, start to finish.
+type runRequest struct {
+	cfg        *config.Config
+	source     string
+	target     string
+	outFile    string
+	keysPath   string
+	childLimit int
+	reportDir  string
+	hooks      *runHooks
 }
 
 func doRunReport(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath string, childLimit int, reportDir string) error {
+	_, err := execute(ctx, runRequest{
+		cfg: cfg, source: dsn, target: to, outFile: out,
+		keysPath: keysPath, childLimit: childLimit, reportDir: reportDir,
+	})
+	return err
+}
+
+// execute runs the slice and returns what it produced, so a caller that wants
+// to render its own summary does not have to recompute any of it.
+func execute(ctx context.Context, r runRequest) (report.Result, error) {
+	cfg, h := r.cfg, r.hooks
+	var res report.Result
+
 	started := time.Now()
-	conn, err := connectSource(ctx, dsn)
+	conn, err := connectSource(ctx, r.source)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer conn.Close(context.Background())
-	ui.Info("source %s (read-only session)", describe(dsn))
+	if !h.quiet() {
+		ui.Info("source %s (read-only session)", describe(r.source))
+	}
+	h.at(stageConnected)
 
 	cat, err := catalog.Load(ctx, conn, cfg.Source.Schemas)
 	if err != nil {
-		return err
+		return res, err
 	}
+	h.at(stageSchema)
 	root := cfg.Root()
 	if _, ok := cat.Table(root); !ok {
-		return fmt.Errorf("root table %s not found in schemas %s",
+		return res, fmt.Errorf("root table %s not found in schemas %s",
 			root, strings.Join(cfg.Source.Schemas, ", "))
 	}
 
 	// Fail closed before touching any data. Finding an unclassified column after
 	// half the slice is on disk is too late to be useful.
 	if v := strictViolations(cat, cfg); len(v) > 0 {
-		for _, c := range v {
-			ui.Detail("%s", c)
+		if !h.quiet() {
+			for _, c := range v {
+				ui.Detail("%s", c)
+			}
 		}
-		return ui.Hint(
+		return res, ui.Hint(
 			fmt.Errorf("strict mode: %d text columns hold unreviewed text", len(v)),
 			"Give each one a rule in "+config.DefaultPath+". Use `keep` if it holds no "+
 				"personal data, `redact` to drop it, or `secret` to replace it.")
@@ -154,17 +244,19 @@ func doRunReport(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath
 	allFKs := append(append([]catalog.FK{}, cat.FKs...), virtual...)
 	plan, err := load.PlanCycles(cat, cat.Refs(), allFKs)
 	if err != nil {
-		return err
+		return res, err
 	}
+	h.at(stageRelationships)
 
-	keys, cleanup, err := openKeys(keysPath)
+	keys, cleanup, err := openKeys(r.keysPath)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer cleanup()
 
 	total, tables := 0, 0
 	perTable := map[string]int{}
+	planned := 0 // rows the walk selected, for the progress bar
 	var live *ui.Live
 	extractStart := time.Now()
 	opt := extract.Options{
@@ -172,57 +264,88 @@ func doRunReport(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath
 		Where:      cfg.Slice.Where,
 		Limit:      cfg.Slice.Limit,
 		ChildDepth: cfg.Slice.ChildDepth,
-		ChildLimit: childLimit,
+		ChildLimit: r.childLimit,
 		Seed:       cfg.Mask.Seed,
 		Classifier: cfg.Classifier(),
 		Discovered: func(ref catalog.Ref, keys, tbls int) {
 			live.Detail("%s rows across %d tables", ui.Count(keys), tbls)
+			h.say("%s rows across %d tables", ui.Count(keys), tbls)
 		},
 		Extracting: func(ref catalog.Ref, rows int) {
 			live.Label("extracting %s", ref)
 			live.Detail("%s rows  %s", ui.Count(total+rows),
 				ui.Rate(total+rows, time.Since(extractStart)))
+			h.moved(total+rows, planned)
 		},
 		Progress: func(ref catalog.Ref, rows int) {
 			total += rows
 			tables++
 			perTable[ref.String()] = rows
-			ui.Step(rows, ref.String())
+			if !h.quiet() {
+				ui.Step(rows, ref.String())
+			}
+			h.moved(total, planned)
 		},
 	}
 	ex, err := extract.Begin(ctx, conn, cat, virtual, keys, opt)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer ex.Close(context.Background())
 
-	live = ui.Start("walking the foreign-key graph")
+	if !h.quiet() {
+		live = ui.Start("walking the foreign-key graph")
+	}
 	if err := ex.Collect(ctx); err != nil {
 		live.Stop()
-		return err
+		return res, err
 	}
-	live.Success("foreign-key closure complete in %s", ui.Duration(live.Elapsed()))
+	if !h.quiet() {
+		live.Success("foreign-key closure complete in %s", ui.Duration(live.Elapsed()))
+	}
 
-	ui.Section("Extract")
-	live = ui.Start("extracting")
+	// Everything up to here is read-only catalog and key work. This is the last
+	// point at which a caller can still call the whole thing off, and the first
+	// at which the row counts are real rather than estimates.
+	counts, err := keyCounts(keys)
+	if err != nil {
+		return res, err
+	}
+	for _, n := range counts {
+		planned += n
+	}
+	h.at(stageSelected)
+	if h != nil && h.confirm != nil {
+		if err := h.confirm(counts, planned); err != nil {
+			return res, err
+		}
+	}
+
+	if !h.quiet() {
+		ui.Section("Extract")
+		live = ui.Start("extracting")
+	}
 	extractStart = time.Now()
 
-	dest, closeDest, err := openSink(ctx, cat, plan, to, out)
+	dest, closeDest, err := openSink(ctx, cat, plan, r.target, r.outFile)
 	if err != nil {
-		return err
+		return res, err
 	}
 	if err := ex.Stream(ctx, dest, plan); err != nil {
 		live.Stop()
 		closeDest(false)
-		return hintLoadFailure(err)
+		return res, hintLoadFailure(err)
 	}
+	h.at(stageExtracted)
 	live.Label("committing")
 	live.Detail("")
+	h.say("committing")
 	if err := closeDest(true); err != nil {
 		live.Stop()
-		return err
+		return res, err
 	}
 	live.Stop()
+	h.at(stageLoaded)
 
 	stats := ui.RunStats{
 		Tables:        tables,
@@ -231,26 +354,45 @@ func doRunReport(ctx context.Context, cfg *config.Config, dsn, to, out, keysPath
 		Duration:      time.Since(started),
 		Warnings:      warnings(),
 	}
-	if to != "" {
-		stats.Target = describe(to)
-	} else if out != "-" {
-		stats.OutFile = out
+	if r.target != "" {
+		stats.Target = describe(r.target)
+	} else if r.outFile != "-" {
+		stats.OutFile = r.outFile
 	}
-	if !flagQuiet {
+	if !flagQuiet && !h.quiet() {
 		ui.Summary(stats)
 	}
 
-	if reportDir == "" {
-		if !flagQuiet && to != "" {
-			ui.NextStep("safeslice verify --target %q", to)
+	if r.reportDir == "" {
+		if !flagQuiet && !h.quiet() && r.target != "" {
+			ui.NextStep("safeslice verify --target %q", r.target)
 		}
-		return nil
+		h.at(stageVerified)
+		h.at(stageReported)
+		return res, nil
 	}
 	return writeArtifacts(ctx, artifactInput{
-		cfg: cfg, cat: cat, source: dsn, target: to, outFile: out,
+		cfg: cfg, cat: cat, source: r.source, target: r.target, outFile: r.outFile,
 		perTable: perTable, total: total, duration: time.Since(started),
-		warnings: warnings(), dir: reportDir,
+		warnings: warnings(), dir: r.reportDir, hooks: h, fks: allFKs,
 	})
+}
+
+// keyCounts reports how many rows the walk selected per table.
+func keyCounts(keys *keyset.Store) (map[string]int, error) {
+	tables, err := keys.Tables()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(tables))
+	for _, t := range tables {
+		n, err := keys.Count(t)
+		if err != nil {
+			return nil, err
+		}
+		out[t] = n
+	}
+	return out, nil
 }
 
 type artifactInput struct {
@@ -264,6 +406,8 @@ type artifactInput struct {
 	duration time.Duration
 	warnings []string
 	dir      string
+	fks      []catalog.FK
+	hooks    *runHooks
 }
 
 // writeArtifacts verifies the loaded database and writes the README, HTML
@@ -271,7 +415,8 @@ type artifactInput struct {
 //
 // Verification runs here rather than being left to the user: a report that omits
 // it would imply the slice was checked when it was not.
-func writeArtifacts(ctx context.Context, in artifactInput) error {
+func writeArtifacts(ctx context.Context, in artifactInput) (report.Result, error) {
+	h := in.hooks
 	rules, redacted, unreviewed := maskingRules(in.cat, in.cfg)
 	est := sourceRowEstimates(in.cat)
 
@@ -289,19 +434,21 @@ func writeArtifacts(ctx context.Context, in artifactInput) error {
 	}
 
 	res := report.Result{
-		Version:    resolveVersion(),
-		Duration:   in.duration,
-		Source:     report.Redact(in.source),
-		RootTable:  in.cfg.Root().String(),
-		Where:      in.cfg.Slice.Where,
-		ChildDepth: in.cfg.Slice.ChildDepth,
-		Seed:       in.cfg.Mask.Seed,
-		Tables:     tables,
-		TotalRows:  in.total,
-		Rules:      rules,
-		Redacted:   redacted,
-		Unreviewed: unreviewed,
-		Warnings:   in.warnings,
+		Version:       resolveVersion(),
+		Duration:      in.duration,
+		Source:        report.Redact(in.source),
+		RootTable:     in.cfg.Root().String(),
+		Where:         in.cfg.Slice.Where,
+		ChildDepth:    in.cfg.Slice.ChildDepth,
+		Seed:          in.cfg.Mask.Seed,
+		Tables:        tables,
+		TotalRows:     in.total,
+		Rules:         rules,
+		Redacted:      redacted,
+		Unreviewed:    unreviewed,
+		Warnings:      in.warnings,
+		Relationships: describeFKs(in.fks),
+		Soft:          describeSoft(graph.SoftKeys(in.cat, in.fks)),
 	}
 	if in.target != "" {
 		res.Target = report.Redact(in.target)
@@ -310,7 +457,10 @@ func writeArtifacts(ctx context.Context, in artifactInput) error {
 	}
 
 	if in.target != "" {
-		live := ui.Start("verifying the loaded database")
+		var live *ui.Live
+		if !h.quiet() {
+			live = ui.Start("verifying the loaded database")
+		}
 		findings, err := scanTarget(ctx, in.target)
 		live.Stop()
 		switch {
@@ -318,6 +468,9 @@ func writeArtifacts(ctx context.Context, in artifactInput) error {
 			res.Warnings = append(res.Warnings, "verification could not run: "+err.Error())
 		default:
 			res.Verification = report.Verification{Ran: true, Passed: len(findings) == 0, Findings: findings}
+			if h.quiet() {
+				break
+			}
 			if len(findings) == 0 {
 				ui.Success("privacy scan found no personal data in the sampled rows")
 			} else {
@@ -328,19 +481,44 @@ func writeArtifacts(ctx context.Context, in artifactInput) error {
 			}
 		}
 	}
+	h.at(stageVerified)
 
 	paths, err := report.Write(in.dir, res)
 	if err != nil {
-		return err
+		return res, err
 	}
-	if !flagQuiet {
+	res.Normalise() // the same fields the artifacts were rendered from
+	h.at(stageReported)
+	if !flagQuiet && !h.quiet() {
 		ui.Section("Artifacts")
 		for _, p := range paths {
 			ui.Detail("%s", p)
 		}
 		ui.NextStep("open %s", filepath.Join(in.dir, "report.html"))
 	}
-	return nil
+	return res, nil
+}
+
+// describeFKs renders the relationships a slice followed, for the artifacts.
+func describeFKs(fks []catalog.FK) []string {
+	out := make([]string, 0, len(fks))
+	for _, fk := range fks {
+		line := fmt.Sprintf("%s(%s) → %s(%s)", fk.Table.Name, strings.Join(fk.Columns, ", "),
+			fk.RefTable.Name, strings.Join(fk.RefColumns, ", "))
+		if fk.Virtual {
+			line += "  [virtual]"
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func describeSoft(soft []graph.Soft) []string {
+	out := make([]string, 0, len(soft))
+	for _, s := range soft {
+		out = append(out, s.String())
+	}
+	return out
 }
 
 // shortName drops the schema qualifier, because masking rules are keyed on the

@@ -152,10 +152,32 @@ func reportHTML(r Result) string {
 		p("</table>\n")
 	}
 
+	// Relationships: what held the slice together, and what could not.
+	if len(r.Relationships) > 0 || len(r.Soft) > 0 {
+		p("<h2>Relationships</h2>\n")
+		if len(r.Relationships) > 0 {
+			p("<table>\n<tr><th>Foreign key</th></tr>\n")
+			for _, rel := range r.Relationships {
+				p("<tr><td><code>%s</code></td></tr>\n", esc(rel))
+			}
+			p("</table>\n")
+		}
+		if len(r.Soft) > 0 {
+			p("<div class=\"note\">%d column pairs look like relationships but have no ", len(r.Soft))
+			p("foreign key, so they were not followed. Declare the ones that matter as ")
+			p("<code>virtual_keys</code>.</div>\n<table>\n")
+			for _, s := range r.Soft {
+				p("<tr><td><code>%s</code></td></tr>\n", esc(s))
+			}
+			p("</table>\n")
+		}
+	}
+
 	// Connect.
 	p("<h2>Connect</h2>\n")
-	p("<pre>DATABASE_URL=%s</pre>\n", esc(r.Target.URL()))
-	p("<pre>psql %s</pre>\n", esc(r.Target.URL()))
+	for _, s := range Snippets(r.Target) {
+		p("<h3 class=\"sub\">%s</h3>\n<pre>%s</pre>\n", esc(s.Name), esc(s.Code))
+	}
 
 	if len(r.Warnings) > 0 {
 		p("<h2>Warnings</h2>\n")
