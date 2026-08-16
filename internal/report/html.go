@@ -59,6 +59,13 @@ border:1px solid var(--line);color:var(--dim)}
 border-radius:0 8px 8px 0;color:var(--dim);margin:12px 0}
 footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
 a{color:var(--sky)}
+.graphwrap{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:8px 4px;overflow-x:auto;color:var(--dim)}
+.graph{display:block;min-width:520px}
+.graph .gn{fill:var(--text);font:600 13px ui-sans-serif,system-ui,sans-serif}
+.graph .gr{fill:var(--dim);font:11px ui-monospace,Menlo,Consolas,monospace}
+.barcell{width:34%;padding-right:18px}
+.bar{display:block;height:7px;border-radius:999px;background:var(--emerald);opacity:.72;min-width:2px}
 `
 
 func reportHTML(r Result) string {
@@ -116,17 +123,28 @@ func reportHTML(r Result) string {
 
 	// Tables.
 	p("<h2>Tables</h2>\n<table>\n<tr><th>Table</th><th class=\"n\">Source rows</th>")
-	p("<th class=\"n\">Extracted</th><th class=\"n\">Masked columns</th></tr>\n")
+	p("<th class=\"n\">Extracted</th><th></th><th class=\"n\">Masked columns</th></tr>\n")
+	// The bar makes the shape of the slice readable at a glance: which table
+	// dominates it, and which came along as a handful of parent rows.
+	widest := 1
+	for _, t := range r.Tables {
+		if t.ExtractedRows > widest {
+			widest = t.ExtractedRows
+		}
+	}
 	for _, t := range r.Tables {
 		src := "—"
 		if t.SourceRows > 0 {
 			src = comma(int(t.SourceRows))
 		}
-		p("<tr><td>%s</td><td class=\"n\">%s</td><td class=\"n\">%s</td><td class=\"n\">%d</td></tr>\n",
-			esc(t.Name), src, comma(t.ExtractedRows), t.MaskedColumns)
+		p("<tr><td>%s</td><td class=\"n\">%s</td><td class=\"n\">%s</td>", esc(t.Name), src,
+			comma(t.ExtractedRows))
+		p("<td class=\"barcell\"><span class=\"bar\" style=\"width:%.1f%%\"></span></td>",
+			float64(t.ExtractedRows)*100/float64(widest))
+		p("<td class=\"n\">%d</td></tr>\n", t.MaskedColumns)
 	}
 	p("<tr><td><strong>Total</strong></td><td class=\"n\"></td>")
-	p("<td class=\"n\"><strong>%s</strong></td><td class=\"n\"></td></tr>\n", comma(r.TotalRows))
+	p("<td class=\"n\"><strong>%s</strong></td><td></td><td class=\"n\"></td></tr>\n", comma(r.TotalRows))
 	p("</table>\n")
 
 	// Masking.
@@ -155,6 +173,11 @@ func reportHTML(r Result) string {
 	// Relationships: what held the slice together, and what could not.
 	if len(r.Relationships) > 0 || len(r.Soft) > 0 {
 		p("<h2>Relationships</h2>\n")
+		if svg := relationshipSVG(r); svg != "" {
+			p("<div class=\"graphwrap\">%s</div>\n", svg)
+			p("<p class=\"sub\">The root table is outlined in green. A dashed line is a ")
+			p("relationship declared in configuration rather than by the schema.</p>\n")
+		}
 		if len(r.Relationships) > 0 {
 			p("<table>\n<tr><th>Foreign key</th></tr>\n")
 			for _, rel := range r.Relationships {

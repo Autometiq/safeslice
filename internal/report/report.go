@@ -105,6 +105,13 @@ type Table struct {
 	MaskedColumns int    `json:"masked_columns"`
 }
 
+// Edge is one foreign key, table to table.
+type Edge struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Virtual bool   `json:"virtual,omitempty"`
+}
+
 // Rule is one masking decision.
 type Rule struct {
 	Column string `json:"column"`
@@ -150,6 +157,9 @@ type Result struct {
 	// rows: safeslice cannot follow what the schema does not declare.
 	Relationships []string `json:"relationships,omitempty"`
 	Soft          []string `json:"unenforced_relationships,omitempty"`
+	// Edges is the same information as Relationships, structured, so the
+	// report can draw the graph instead of describing it.
+	Edges []Edge `json:"edges,omitempty"`
 	// Unreviewed lists columns a human left as `keep` without judging them.
 	Unreviewed []string `json:"unreviewed_columns,omitempty"`
 

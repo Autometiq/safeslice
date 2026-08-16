@@ -449,6 +449,7 @@ func writeArtifacts(ctx context.Context, in artifactInput) (report.Result, error
 		Warnings:      in.warnings,
 		Relationships: describeFKs(in.fks),
 		Soft:          describeSoft(graph.SoftKeys(in.cat, in.fks)),
+		Edges:         edgesOf(in.fks),
 	}
 	if in.target != "" {
 		res.Target = report.Redact(in.target)
@@ -522,6 +523,24 @@ func describeFKs(fks []catalog.FK) []string {
 			line += "  [virtual]"
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+// edgesOf reduces the foreign keys to table-to-table edges, deduplicated: the
+// diagram draws one line between two tables however many columns join them.
+func edgesOf(fks []catalog.FK) []report.Edge {
+	seen := map[string]bool{}
+	out := make([]report.Edge, 0, len(fks))
+	for _, fk := range fks {
+		key := fk.Table.String() + "\x00" + fk.RefTable.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, report.Edge{
+			From: fk.Table.String(), To: fk.RefTable.String(), Virtual: fk.Virtual,
+		})
 	}
 	return out
 }
