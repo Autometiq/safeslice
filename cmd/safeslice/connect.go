@@ -96,21 +96,33 @@ func explainConnection(dsn string, err error) connectAction {
 	ui.Detail("%s", ui.Field("User", e.User))
 	ui.Detail("")
 
+	// Once the driver's message is on screen there is no reason to offer it
+	// again: leaving it in redraws the same list after every look and reads as
+	// a loop with no way out. Dropping it guarantees the menu only ever gets
+	// shorter, so every path leads somewhere.
+	shown := false
 	for {
-		switch ui.Select("What would you like to do?", []ui.Option{
+		opts := []ui.Option{
 			{Label: "Retry", Note: "try the same connection again"},
 			{Label: "Change the connection", Note: "type a different connection string"},
 			{Label: "Enter a password", Note: "keeps it out of your shell history"},
-			{Label: "Show the technical error", Note: "the driver's own message"},
-			{Label: "Cancel", Note: ""},
-		}, 1) {
-		case 0:
+		}
+		if !shown {
+			opts = append(opts, ui.Option{
+				Label: "Show the technical error", Note: "the driver's own message",
+			})
+		}
+		opts = append(opts, ui.Option{Label: "Cancel", Note: "stop here; nothing has been read"})
+
+		switch label(opts, ui.Select("What would you like to do?", opts, 1)) {
+		case "Retry":
 			return connectRetry
-		case 1:
+		case "Change the connection":
 			return connectChange
-		case 2:
+		case "Enter a password":
 			return connectPassword
-		case 3:
+		case "Show the technical error":
+			shown = true
 			ui.Detail("%s", err.Error())
 			ui.Detail("")
 		default:

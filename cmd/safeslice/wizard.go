@@ -1286,36 +1286,28 @@ func (w *wizard) finish(res report.Result) {
 	ui.Detail("")
 	ui.Detail("Prisma, Rails, Django and Node.js snippets are in the README.")
 
-	// The report is the thing worth looking at, so it opens on its own.
-	htmlPath := absOr(filepath.Join(w.reportDir, "report.html"))
-	if !flagNoOpen {
-		if err := report.Open(htmlPath); err == nil {
-			ui.Detail("")
-			ui.Detail("Opening the report in your browser (--no-open to stop this).")
-		}
-	}
-
 	w.record(res)
 	w.offerProfile()
-	w.results(res)
+	showResults(w.reportDir, res.Target)
 }
 
-// results is the last screen: everything the run produced, one keystroke away.
+// showResults is the last screen: everything the run produced, one keystroke
+// away.
 //
-// Printing five paths and trusting the reader to paste one into the right
-// program is how a good report goes unread. This opens them instead, and stays
-// until the reader is done rather than dropping them back at the main menu to
-// find their own way out.
-func (w *wizard) results(res report.Result) {
+// Nothing opens on its own. A tool that throws a browser window at you the
+// moment it finishes has decided what you wanted next; this offers instead,
+// and stays until you are done rather than dropping you back at the main menu
+// to find your own way out.
+func showResults(dir string, target report.Endpoint) {
 	type artifact struct {
 		label, note, file string
 	}
 	files := []artifact{
-		{"Open the HTML report", "the full run, formatted", "report.html"},
-		{"Open the output folder", w.reportDir, ""},
-		{"Copy the connection string", res.Target.URL(), "-"},
+		{"Open the HTML report", "the full run, formatted — charts, tables, checks", "report.html"},
+		{"Open the output folder", absOr(dir), ""},
+		{"Copy the connection string", target.URL(), "-"},
 		{"Open README.md", "the same summary in Markdown", "README.md"},
-		{"Open tables.csv", "row counts per table", "tables.csv"},
+		{"Open tables.csv", "row counts per table, for a spreadsheet", "tables.csv"},
 		{"Open summary.json", "machine-readable, for CI", "summary.json"},
 		{"Open masking-rules.yaml", "the rules that were applied", "masking-rules.yaml"},
 	}
@@ -1330,19 +1322,19 @@ func (w *wizard) results(res report.Result) {
 		i := ui.Select("", opts, 0)
 		if i < 0 || i == len(files) {
 			ui.Detail("")
-			ui.Detail("Everything is in %s", absOr(w.reportDir))
+			ui.Detail("Everything is in %s", absOr(dir))
 			ui.Footer()
 			return
 		}
 		f := files[i]
 		switch {
 		case f.file == "":
-			if err := report.Reveal(w.reportDir); err != nil {
+			if err := report.Reveal(dir); err != nil {
 				ui.Warn("could not open the folder: %s", err)
-				ui.Detail("%s", absOr(w.reportDir))
+				ui.Detail("%s", absOr(dir))
 			}
 		case f.file == "-":
-			url := res.Target.URL()
+			url := target.URL()
 			if report.Clipboard(url) {
 				ui.Success("copied  %s", url)
 			} else {
@@ -1351,7 +1343,7 @@ func (w *wizard) results(res report.Result) {
 				ui.Detail("%s", url)
 			}
 		default:
-			path := absOr(filepath.Join(w.reportDir, f.file))
+			path := absOr(filepath.Join(dir, f.file))
 			if err := report.Open(path); err != nil {
 				ui.Warn("could not open it: %s", err)
 				ui.Detail("%s", path)

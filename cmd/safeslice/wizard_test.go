@@ -332,7 +332,7 @@ func TestResultsScreenExitsCleanly(t *testing.T) {
 	// anything -- a test that launches a browser is a test nobody runs twice.
 	buf := script(t, "8\n")
 	w := newTestWizard(t)
-	w.results(report.Result{Target: report.Endpoint{Host: "localhost", Port: "5432", Database: "shop_dev"}})
+	showResults(w.reportDir, report.Endpoint{Host: "localhost", Port: "5432", Database: "shop_dev"})
 
 	got := buf.String()
 	if !strings.Contains(got, w.reportDir) {
@@ -343,7 +343,7 @@ func TestResultsScreenExitsCleanly(t *testing.T) {
 func TestResultsScreenOffersEveryArtifact(t *testing.T) {
 	buf := script(t, "8\n")
 	w := newTestWizard(t)
-	w.results(report.Result{Target: report.Endpoint{Host: "localhost", Database: "shop_dev"}})
+	showResults(w.reportDir, report.Endpoint{Host: "localhost", Database: "shop_dev"})
 
 	got := buf.String()
 	for _, want := range []string{
