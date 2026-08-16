@@ -216,6 +216,25 @@ Plus a `safeslice.yaml` in your project, so the same slice is repeatable by anyo
 
 <br />
 
+## How it compares
+
+Safeslice is not the only way to do this, and pretending otherwise would be a poor start to a tool you are asked to trust with production credentials.
+
+| | Pick it when |
+|---|---|
+| **[Greenmask](https://greenmask.io)** | You want a drop-in `pg_dump` / `pg_restore` replacement, or you need MySQL. Mature, actively released, and its subsetting handles virtual, polymorphic and cyclic references. |
+| **[PostgreSQL Anonymizer](https://postgresql-anonymizer.readthedocs.io)** | You want masking rules declared inside the schema, travelling with it in every dump. Strongest for compliance-first teams. |
+| **[Tonic.ai](https://tonic.ai)** | You need Oracle, SQL Server, Snowflake, MongoDB and a vendor to call. Enterprise pricing, and by default your data flows through their infrastructure. |
+| **`pg_dump`** | You genuinely need every row. That is what it is for. |
+| **Synthetic data** | You need volume and total safety, and can live without the edge cases only real data has. |
+| **Safeslice** | You want one command, a slice small enough for a laptop, **and evidence that the result is clean**. |
+
+**What Safeslice does that the others do not:** it verifies its own output. After loading, it scans the target for surviving email addresses, phone numbers, IPs and Luhn-valid card numbers, exits non-zero on any finding, and writes an audit trail of what was copied and masked. Masking tools mask; this one then checks, and refuses to run at all while a text column is unreviewed.
+
+**On durability.** [Snaplet shut down in August 2024](https://www.snaplet.dev/post/snaplet-is-shutting-down) for lack of traction, and [Neosync was acqui-hired and archived in August 2025](https://github.com/nucleuscloud/neosync). Both were open-source front ends to a hosted service, and Neosync self-hosted meant running Temporal, its own PostgreSQL, and optionally Redis and Keycloak. Safeslice has no service, no scheduler and no control plane — one static binary that reads one database and writes another. There is nothing here to wind down.
+
+<br />
+
 ## Security model
 
 - **The source is opened read-only.** `SET default_transaction_read_only = on` before anything else runs, so no bug here and no predicate you paste can write to production. Run it against a replica.
