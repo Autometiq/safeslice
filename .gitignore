@@ -11,3 +11,8 @@ slice.sql
 /.safeslice/
 /safeslice-output/
 /safeslice-demo/
+
+# The Remotion project that renders the demo. Its source lives on its own
+# branch; what is left here is node_modules and rendered output, which is
+# 17,000 files of dependencies one `git add -A` away from the history.
+/video/
