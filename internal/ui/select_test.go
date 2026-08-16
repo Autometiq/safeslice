@@ -55,10 +55,13 @@ func TestSelectGivesUpOnClosedInput(t *testing.T) {
 	}
 }
 
-func TestSelectPrefersTheDefaultWhenInputEnds(t *testing.T) {
+func TestSelectGivesUpWhenInputEndsEvenWithADefault(t *testing.T) {
+	// A closed stream must not be read as "took the default". A menu that
+	// re-prompts would otherwise never terminate under a pipe -- which is
+	// exactly how the results screen hung CI for ten minutes.
 	prompts(t, "")
-	if got := Select("what now?", wizardOptions, 1); got != 1 {
-		t.Errorf("Select = %d, want the default", got)
+	if got := Select("what now?", wizardOptions, 1); got != -1 {
+		t.Errorf("Select = %d, want -1 so a re-prompting caller can stop", got)
 	}
 }
 

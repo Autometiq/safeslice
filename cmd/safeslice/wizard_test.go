@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autometiq/safeslice/internal/catalog"
 	"github.com/Autometiq/safeslice/internal/config"
@@ -353,5 +354,25 @@ func TestResultsScreenOffersEveryArtifact(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("results screen is missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestResultsScreenTerminatesOnClosedInput(t *testing.T) {
+	// The bug this pins: with stdin exhausted the menu took its default,
+	// re-prompted, read EOF again and looped forever. Under `go test` that is
+	// a ten-minute timeout, and in a piped run it is a process that never
+	// exits. The test itself would hang without the fix, so the timeout is
+	// the assertion.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		script(t, "")
+		w := newTestWizard(t)
+		showResults(w.reportDir, report.Endpoint{Host: "localhost", Database: "shop_dev"})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the results screen never returned with input closed")
 	}
 }

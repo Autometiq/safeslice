@@ -101,16 +101,19 @@ func selectTyped(title string, opts []Option, def int) int {
 		text, err := r.ReadString('\n')
 		got := strings.TrimSpace(text)
 		if got == "" {
-			if err != nil && def < 0 {
+			// A closed stream is not the same as pressing enter. Returning the
+			// default here means a menu that re-prompts -- the results screen --
+			// never terminates under a pipe: it takes the default, comes back,
+			// reads EOF again, forever. That hung CI until the ten-minute
+			// timeout. Pressing enter interactively still yields "\n" with no
+			// error, so the default survives where it is actually meant.
+			if err != nil {
 				emitf("\n")
-				return -1 // stream ended with no answer and nothing to fall back on
+				return -1
 			}
 			if def >= 0 {
 				emitf("\n")
 				return def
-			}
-			if err != nil {
-				return -1
 			}
 			continue
 		}
