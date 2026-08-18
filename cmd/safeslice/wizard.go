@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"gopkg.in/yaml.v3"
 
 	"github.com/Autometiq/safeslice/internal/catalog"
@@ -390,6 +391,9 @@ func (w *wizard) discover() error {
 	}
 
 	w.applyPrefill()
+	if err := w.chooseSchemas(conn); err != nil {
+		return err
+	}
 
 	live := ui.Start("reading the schema")
 	w.cat, err = catalog.Load(w.ctx, conn, w.cfg.Source.Schemas)
@@ -433,6 +437,49 @@ func (w *wizard) discover() error {
 	// never asked about a column they remember deciding on.
 	if n := len(w.cfg.Mask.Rules); n > 0 {
 		ui.Detail("Using the %d rules already in %s.", n, config.DefaultPath)
+	}
+	return nil
+}
+
+// chooseSchemas asks which schemas to slice, but only when the answer is not
+// obvious.
+//
+// The wizard used to assume `public` and take --schema for anything else,
+// which meant a database that keeps its tables in `app` or one schema per
+// tenant could not be driven from the wizard at all -- and the wizard is the
+// path for people who do not know the flags exist.
+func (w *wizard) chooseSchemas(conn *pgx.Conn) error {
+	if len(flagSchemas) > 0 {
+		return nil // the flag was explicit; do not second-guess it
+	}
+	found, err := listSchemas(w.ctx, conn)
+	if err != nil || len(found) <= 1 {
+		return nil // nothing to choose between
+	}
+
+	opts := make([]ui.Option, 0, len(found)+1)
+	def := 0
+	for i, s := range found {
+		note := ""
+		if s == "public" {
+			note = "the default"
+			def = i
+		}
+		opts = append(opts, ui.Option{Label: s, Note: note})
+	}
+	opts = append(opts, ui.Option{Label: "All of them",
+		Note: fmt.Sprintf("%d schemas", len(found))})
+
+	ui.Section("Schemas")
+	ui.Detail("This database keeps tables in more than one schema.")
+	i := ui.Select("Which should the slice cover?", opts, def)
+	switch {
+	case i < 0:
+		return errors.New("cancelled at the schema selection")
+	case i == len(found):
+		w.cfg.Source.Schemas = found
+	default:
+		w.cfg.Source.Schemas = []string{found[i]}
 	}
 	return nil
 }
@@ -917,8 +964,8 @@ func (w *wizard) createLocal(admin string) error {
 func (w *wizard) resolveExisting(admin, name string) (string, bool, error) {
 	ui.Warn("database %q already exists", name)
 	switch ui.Select("What should happen to it?", []ui.Option{
-		{Label: "Use it as it is", Note: "load into the existing schema",
-			Body: []string{"Rows are added to what is already there."}},
+		{Label: "Use it", Note: "load into the existing schema",
+			Body: []string{"If it already holds rows, the next step offers to empty them."}},
 		{Label: fmt.Sprintf("Create %q instead", name+"_2"), Note: "leaves the original alone"},
 		{Label: "Choose another name", Note: ""},
 		{Label: "Replace it", Note: "destroys everything in it",
@@ -989,7 +1036,7 @@ func (w *wizard) prepareTarget(fresh bool) error {
 		}
 		if len(missing) == 0 {
 			ui.Success("the target already has every table the slice needs")
-			return nil
+			return w.offerRefresh()
 		}
 
 		ui.Warn("%d of %d tables are missing from the target", len(missing), len(w.cat.Refs()))
@@ -1027,6 +1074,45 @@ func (w *wizard) prepareTarget(fresh bool) error {
 		default:
 			return errors.New("cancelled at the destination")
 		}
+	}
+}
+
+// offerRefresh deals with a target that already holds rows.
+//
+// safeslice inserts; it does not upsert. Loading a second slice into tables
+// that already hold one collides on the primary key, and that is the most
+// likely thing to happen to anyone who runs the wizard twice -- which is
+// everyone, eventually. This is checked here rather than beside the
+// "database already exists" question because every destination reaches this
+// point: the one it created, the one you named, and the container.
+func (w *wizard) offerRefresh() error {
+	has, err := targetHasRows(w.ctx, w.target, w.cfg.Source.Schemas)
+	if err != nil || !has {
+		return nil // empty, or unreadable -- the load will report it either way
+	}
+
+	ui.Warn("%s already holds data", targetDatabase(w.target))
+	switch ui.Select("What should happen to it?", []ui.Option{
+		{Label: "Empty it first", Note: "keeps the schema, drops the rows",
+			Body: []string{"TRUNCATE every table, then load the new slice into them."}},
+		{Label: "Add to it", Note: "fails if a row already has the same key"},
+		{Label: "Cancel", Note: "nothing has been written"},
+	}, 0) {
+	case 0:
+		live := ui.Start("emptying %s", targetDatabase(w.target))
+		n, err := truncateAll(w.ctx, w.target, w.cfg.Source.Schemas)
+		live.Stop()
+		if err != nil {
+			return ui.Hint(err, "PostgreSQL refused to empty the tables. Usually this means a "+
+				"table outside the schemas being sliced references one inside them; load into "+
+				"a fresh database instead.")
+		}
+		ui.Success("emptied %d tables", n)
+		return nil
+	case 1:
+		return nil
+	default:
+		return errors.New("cancelled at the destination")
 	}
 }
 

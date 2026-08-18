@@ -147,6 +147,13 @@ func causesFor(err error) string {
 			"Check the name at the end of the connection string, or create it first."
 	case strings.Contains(msg, "timeout"), strings.Contains(msg, "i/o timeout"):
 		return "The host did not answer in time. It may be behind a VPN or firewall, or the host name may be wrong."
+	case strings.Contains(msg, "pg_hba"), strings.Contains(msg, "ssl"), strings.Contains(msg, "tls"):
+		// Hosted Postgres refuses unencrypted connections, and the server's own
+		// wording for it ("no pg_hba.conf entry ... no encryption") names a file
+		// the user cannot see and will never edit.
+		return "The server refused the connection, usually because it requires TLS. " +
+			"Managed Postgres -- RDS, Supabase, Neon, Azure -- generally does. " +
+			"Add ?sslmode=require to the end of the connection string."
 	default:
 		return "Possible causes: PostgreSQL is not running, the port is wrong, " +
 			"the database does not exist, or authentication failed."
@@ -289,6 +296,102 @@ func dropDatabase(ctx context.Context, admin, name string) error {
 }
 
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+
+// listSchemas returns the schemas in a database that actually hold tables.
+//
+// Only schemas with tables in them: offering a list that includes every empty
+// namespace an extension happened to create is a worse question than not
+// asking.
+func listSchemas(ctx context.Context, conn *pgx.Conn) ([]string, error) {
+	rows, err := conn.Query(ctx, `SELECT DISTINCT schemaname FROM pg_tables
+		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY schemaname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// truncateAll empties every table in the target's schemas, keeping the schema
+// itself. This is what a second run into the same database needs: safeslice
+// inserts rows, so loading twice collides on the primary key.
+//
+// Every table goes into one statement, which is what lets this avoid CASCADE.
+// TRUNCATE only refuses when a referencing table is missing from the list, and
+// nothing is missing when the list is "all of them" -- so the blast radius is
+// exactly the tables named, with no silent recursion into whatever else
+// happens to reference them.
+func truncateAll(ctx context.Context, target string, schemas []string) (int, error) {
+	conn, err := pgx.Connect(ctx, target)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close(context.Background())
+
+	cat, err := catalog.Load(ctx, conn, schemas)
+	if err != nil {
+		return 0, err
+	}
+	names := make([]string, 0, len(cat.Tables))
+	for _, ref := range cat.Refs() {
+		t, ok := cat.Table(ref)
+		if !ok || t.Partition {
+			continue // truncating the parent takes its partitions with it
+		}
+		names = append(names, quoteIdent(ref.Schema)+"."+quoteIdent(ref.Name))
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	// RESTART IDENTITY so the reloaded rows start from 1 again rather than
+	// continuing from wherever the previous run left the sequences.
+	_, err = conn.Exec(ctx, "TRUNCATE "+strings.Join(names, ", ")+" RESTART IDENTITY")
+	if err != nil {
+		return 0, err
+	}
+	return len(names), nil
+}
+
+// targetHasRows reports whether any table in the target already holds data.
+//
+// One query with short-circuiting ORs rather than a count per table: the
+// answer is a yes/no, and on a database with two hundred tables the difference
+// is one round trip against two hundred.
+func targetHasRows(ctx context.Context, target string, schemas []string) (bool, error) {
+	conn, err := pgx.Connect(ctx, target)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close(context.Background())
+
+	cat, err := catalog.Load(ctx, conn, schemas)
+	if err != nil {
+		return false, err
+	}
+	parts := make([]string, 0, len(cat.Tables))
+	for _, ref := range cat.Refs() {
+		if t, ok := cat.Table(ref); ok && t.Partition {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("EXISTS(SELECT 1 FROM %s.%s)",
+			quoteIdent(ref.Schema), quoteIdent(ref.Name)))
+	}
+	if len(parts) == 0 {
+		return false, nil
+	}
+	var any bool
+	err = conn.QueryRow(ctx, "SELECT "+strings.Join(parts, " OR ")).Scan(&any)
+	return any, err
+}
 
 // missingTables reports which of the source's tables the target does not have.
 //

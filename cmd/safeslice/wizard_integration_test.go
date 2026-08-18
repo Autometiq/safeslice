@@ -293,3 +293,62 @@ func chdir(t *testing.T, dir string) {
 	}
 	t.Cleanup(func() { os.Chdir(old) })
 }
+
+func TestWizardSecondRunCanRefreshTheTarget(t *testing.T) {
+	// safeslice inserts; it does not upsert. Running the wizard twice into the
+	// same database used to collide on the primary key with no way out but a
+	// DROP -- which is the most likely thing to happen to anyone who uses it
+	// more than once.
+	src, dst := wizardSetup(t)
+	chdir(t, t.TempDir())
+	flagNoOpen = true
+	t.Cleanup(func() { flagNoOpen = false })
+
+	first := answers{
+		source: "1", sourceDSN: src,
+		classify: "1", sliceSize: "1", root: "1", filter: "",
+		destination: "2", targetDSN: dst,
+		review:      "1",
+		saveProfile: "n",
+	}
+	script(t, first.script())
+	if err := createFlow(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var before int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if before == 0 {
+		t.Fatal("first run loaded nothing, so the rerun proves nothing")
+	}
+
+	// A fresh directory for the second run: the safeslice.yaml the first one
+	// wrote would otherwise mean no classification question, shifting every
+	// later answer by one.
+	chdir(t, t.TempDir())
+
+	// The target now holds rows, so the wizard must offer to empty it. "1"
+	// takes that option; without it the load fails on a duplicate key.
+	second := first
+	second.targetDSN = dst + "\n1"
+	buf := script(t, second.script())
+	if err := createFlow(context.Background()); err != nil {
+		t.Fatalf("second run: %v\n%s", err, buf.String())
+	}
+
+	var after int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Errorf("after refresh %d rows, want the same %d as a single run", after, before)
+	}
+}

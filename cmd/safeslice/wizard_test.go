@@ -241,10 +241,12 @@ func TestReviewNeverPrintsTheSourcePassword(t *testing.T) {
 
 func TestConnectionFailuresAreExplainedInPlainLanguage(t *testing.T) {
 	cases := map[string]string{
-		`failed to connect: password authentication failed for user "app"`: "username or password",
-		`database "myapp_dev" does not exist`:                              "does not exist",
-		"dial tcp 127.0.0.1:5432: i/o timeout":                             "did not answer",
-		"dial tcp 127.0.0.1:5432: connectex: refused":                      "PostgreSQL is not running",
+		`failed to connect: password authentication failed for user "app"`:          "username or password",
+		`database "myapp_dev" does not exist`:                                       "does not exist",
+		"dial tcp 127.0.0.1:5432: i/o timeout":                                      "did not answer",
+		"dial tcp 127.0.0.1:5432: connectex: refused":                               "PostgreSQL is not running",
+		`FATAL: no pg_hba.conf entry for host "1.2.3.4", user "app", no encryption`: "sslmode=require",
+		"failed to connect: server does not support SSL":                            "sslmode=require",
 	}
 	for msg, want := range cases {
 		if got := causesFor(errors.New(msg)); !strings.Contains(got, want) {
