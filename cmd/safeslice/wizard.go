@@ -98,7 +98,10 @@ func runWizard(ctx context.Context) error {
 			{Label: "Create a safe development database", Note: "the whole workflow, start to finish"},
 			{Label: "Inspect an existing configuration", Note: "what a run would do; reads no data"},
 			{Label: "Verify an existing database", Note: "scan for personal data that survived"},
-			{Label: "Run demo", Note: "throwaway database — nothing of yours is touched"},
+			// Says it needs Docker up front. Probing for the daemon here would
+			// cost every launch a subprocess call, and `docker info` is at its
+			// slowest exactly when the answer is no.
+			{Label: "Run demo", Note: "needs Docker · throwaway database, nothing of yours is touched"},
 			{Label: "Advanced / CLI mode", Note: "the commands behind all of this"},
 			{Label: "Quit", Note: ""},
 		}, 0)
