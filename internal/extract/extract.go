@@ -128,14 +128,6 @@ func Begin(ctx context.Context, conn *pgx.Conn, cat *catalog.Catalog, virtual []
 // Close ends the read transaction. It never commits: nothing was written.
 func (e *Extractor) Close(ctx context.Context) error { return e.tx.Rollback(ctx) }
 
-// Snapshot exports this transaction's snapshot id so future parallel workers
-// can join it with SET TRANSACTION SNAPSHOT and see exactly the same rows.
-func (e *Extractor) Snapshot(ctx context.Context) (string, error) {
-	var id string
-	err := e.tx.QueryRow(ctx, "SELECT pg_export_snapshot()").Scan(&id)
-	return id, err
-}
-
 // Collect walks the graph and fills the key store.
 //
 // Parents are followed unconditionally and transitively: a row cannot be
