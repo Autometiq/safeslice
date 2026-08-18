@@ -250,6 +250,17 @@ func readme(r Result) string {
 	}
 	p("- Completed in %s\n\n", r.Duration.Round(time.Millisecond))
 
+	// Name the columns. "found personal data" without saying where is a result
+	// nobody can act on, and this file is what gets attached to the ticket.
+	if len(r.Verification.Findings) > 0 {
+		p("### What the scan flagged\n\n")
+		for _, f := range r.Verification.Findings {
+			p("- %s\n", f)
+		}
+		p("\nGive each one a rule in `safeslice.yaml` and run again. If a match is a false ")
+		p("positive, exclude it with `--ignore table.column`.\n\n")
+	}
+
 	p("> %s\n\n", r.Verification.Caveat)
 
 	p("## Source\n\n")
@@ -273,12 +284,30 @@ func readme(r Result) string {
 	}
 	p("| **Total** | **%s** |\n\n", comma(r.TotalRows))
 
-	if len(r.Rules) > 0 {
-		p("## Masking\n\n| Column | Rule |\n|---|---|\n")
-		for _, rule := range r.Rules {
-			p("| %s | %s |\n", rule.Column, rule.Rule)
+	// Grouped by table rather than listed flat: the question a reader opens
+	// this with is "what happened to my users table", not "which columns were
+	// masked". Tables nothing touched are listed too -- absence is the part
+	// worth checking.
+	if len(r.Rules) > 0 || len(r.Redacted) > 0 {
+		p("## What happened to each table\n\n")
+		for _, g := range byTable(r) {
+			p("### %s\n\n%s rows extracted. ", g.name, comma(g.rows))
+			if g.masked+g.redacted == 0 {
+				p("No column matched a masking rule; the rows were copied unchanged.\n\n")
+				continue
+			}
+			if g.redacted == 0 {
+				p("%d columns masked.\n\n", g.masked)
+			} else {
+				p("%d columns masked, %d dropped.\n\n", g.masked, g.redacted)
+			}
+			p("| Column | Rule | What it becomes |\n|---|---|---|\n")
+			for _, c := range g.cols {
+				p("| %s | %s | %s |\n", c.Column, c.Rule, ruleMeaning(c.Rule))
+			}
+			p("\n")
 		}
-		p("\n%d columns transformed.\n\n", len(r.Rules))
+		p("%d columns transformed in total.\n\n", len(r.Rules))
 	}
 	if len(r.Redacted) > 0 {
 		p("### Redacted\n\nThese values were dropped rather than replaced.\n\n")

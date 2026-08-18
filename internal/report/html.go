@@ -66,6 +66,19 @@ padding:8px 4px;overflow-x:auto;color:var(--dim)}
 .graph .gr{fill:var(--dim);font:11px ui-monospace,Menlo,Consolas,monospace}
 .barcell{width:34%;padding-right:18px}
 .bar{display:block;height:7px;border-radius:999px;background:var(--emerald);opacity:.72;min-width:2px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:8px 0}
+details>summary{cursor:pointer;padding:12px 16px;display:flex;align-items:center;gap:10px;
+font-size:14px;list-style:none;user-select:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸";color:var(--dim);font-size:11px;transition:transform .15s}
+details[open]>summary::before{transform:rotate(90deg)}
+details>summary:hover{background:rgba(127,127,127,.06)}
+details>*:not(summary){margin:0 16px 14px}
+details table{border:0;border-radius:0;background:none}
+.tname{font-weight:600}
+.tmeta{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums;margin-left:auto}
+.pill--ok{color:var(--emerald);border-color:var(--emerald)}
+.pill--warn{color:var(--amber);border-color:var(--amber)}
 `
 
 func reportHTML(r Result) string {
@@ -147,18 +160,49 @@ func reportHTML(r Result) string {
 	p("<td class=\"n\"><strong>%s</strong></td><td></td><td class=\"n\"></td></tr>\n", comma(r.TotalRows))
 	p("</table>\n")
 
-	// Masking.
+	// Masking, table by table.
+	//
+	// A flat list of forty columns answers "what was masked" but not the
+	// question people actually open the report with, which is "what happened to
+	// my users table". Every table gets an entry, including the ones nothing
+	// touched -- absence is the part worth checking.
 	if len(r.Rules) > 0 || len(r.Redacted) > 0 {
-		p("<h2>Masking</h2>\n<table>\n<tr><th>Column</th><th>Rule</th></tr>\n")
-		for _, rule := range r.Rules {
-			p("<tr><td><code>%s</code></td><td><span class=\"pill\">%s</span></td></tr>\n",
-				esc(rule.Column), esc(rule.Rule))
+		p("<h2>What happened to each table</h2>\n")
+		p("<p class=\"sub\">Click a table to see its columns. Tables with nothing masked ")
+		p("are listed too — an empty one is worth noticing.</p>\n")
+		for _, g := range byTable(r) {
+			open := ""
+			if g.masked+g.redacted > 0 && len(r.Tables) <= 8 {
+				open = " open" // a small slice fits on screen; do not make them click
+			}
+			p("<details class=\"tbl\"%s><summary><span class=\"tname\">%s</span>", open, esc(g.name))
+			p("<span class=\"tmeta\">%s rows</span>", comma(g.rows))
+			switch {
+			case g.masked+g.redacted == 0:
+				p("<span class=\"pill\">nothing masked</span>")
+			default:
+				if g.masked > 0 {
+					p("<span class=\"pill pill--ok\">%d %s masked</span>", g.masked, plural(g.masked, "column", "columns"))
+				}
+				if g.redacted > 0 {
+					p("<span class=\"pill pill--warn\">%d dropped</span>", g.redacted)
+				}
+			}
+			p("</summary>\n")
+			if len(g.cols) == 0 {
+				p("<p class=\"sub\" style=\"margin:10px 0 0\">No column in this table matched a ")
+				p("masking rule. Its rows were copied unchanged.</p>\n")
+			} else {
+				p("<table>\n<tr><th>Column</th><th>Rule</th><th>What it becomes</th></tr>\n")
+				for _, c := range g.cols {
+					p("<tr><td><code>%s</code></td><td><span class=\"pill\">%s</span></td>"+
+						"<td class=\"sub\">%s</td></tr>\n",
+						esc(c.Column), esc(c.Rule), esc(ruleMeaning(c.Rule)))
+				}
+				p("</table>\n")
+			}
+			p("</details>\n")
 		}
-		for _, rule := range r.Redacted {
-			p("<tr><td><code>%s</code></td><td><span class=\"pill\">%s</span></td></tr>\n",
-				esc(rule.Column), esc(rule.Rule))
-		}
-		p("</table>\n")
 	}
 	if len(r.Unreviewed) > 0 {
 		p("<h2>Not reviewed</h2>\n")
