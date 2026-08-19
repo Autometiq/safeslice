@@ -537,7 +537,13 @@ func dockerTarget(ctx context.Context, database string, say func(string)) (strin
 				return "", fmt.Errorf("starting %s: %s", targetContainer, firstLine(string(out)))
 			}
 		} else {
-			say("starting postgres:17 (first run pulls the image)")
+			// Pulled explicitly, for the same reason the demo does: `docker run`
+			// would fetch it silently and this status line would sit unchanged
+			// for minutes.
+			if err := demo.EnsureImage(ctx, say); err != nil {
+				return "", err
+			}
+			say("starting the container")
 			if out, err := exec.CommandContext(ctx, "docker", "run", "-d",
 				"--name", targetContainer,
 				"-e", "POSTGRES_PASSWORD="+targetPassword,
