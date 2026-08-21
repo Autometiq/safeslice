@@ -130,3 +130,16 @@ func TestCardCheckRequiresConfirmation(t *testing.T) {
 		}
 	}
 }
+
+func TestNewDetectorsPresent(t *testing.T) {
+	kinds := map[string]bool{}
+	for _, c := range Checks() {
+		kinds[c.Kind] = true
+	}
+	if !kinds["secret token"] {
+		t.Error("missing secret token check")
+	}
+	if !kinds["national id"] {
+		t.Error("missing national id check")
+	}
+}
