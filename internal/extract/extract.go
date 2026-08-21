@@ -52,10 +52,11 @@ type Sink interface {
 }
 
 type Options struct {
-	Root       catalog.Ref
-	Where      string
-	Limit      int
-	ChildDepth int
+	Root          catalog.Ref
+	Where         string
+	Limit         int
+	SamplePercent float64
+	ChildDepth    int
 	// ChildLimit caps how many child rows a single parent batch may pull in.
 	// Without it one popular row drags in a whole table.
 	ChildLimit int
@@ -226,8 +227,16 @@ func (e *Extractor) rootKeys(ctx context.Context, root catalog.Ref) ([]keyset.Ke
 		return nil, err
 	}
 	q := fmt.Sprintf("SELECT %s FROM %s", cols("t", pk), load.Qualified(root))
+	var preds []string
 	if e.opt.Where != "" {
-		q += " WHERE " + e.opt.Where
+		preds = append(preds, "("+e.opt.Where+")")
+	}
+	if e.opt.SamplePercent > 0 && e.opt.SamplePercent < 100 {
+		pkConcat := strings.Join(pk, ` || ':' || `)
+		preds = append(preds, fmt.Sprintf("abs(hashtext((%s)::text)) %% 10000 < %d", pkConcat, int(e.opt.SamplePercent*100)))
+	}
+	if len(preds) > 0 {
+		q += " WHERE " + strings.Join(preds, " AND ")
 	}
 	q += fmt.Sprintf(" LIMIT %d", e.opt.Limit)
 	// The alias makes `cols` uniform; the predicate stays unqualified so a user
