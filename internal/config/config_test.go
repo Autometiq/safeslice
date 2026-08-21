@@ -229,3 +229,41 @@ func TestRootQualification(t *testing.T) {
 		t.Errorf("Root = %v, want app.users", got)
 	}
 }
+
+func TestVerifyConfigParsing(t *testing.T) {
+	body := `
+version: 1
+verify:
+  checks:
+    - name: employee_id
+      pattern: 'EMP-[0-9]{6}'
+  ignore:
+    - public.users.id
+`
+	cfg, err := Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load verify config: %v", err)
+	}
+	if len(cfg.Verify.Checks) != 1 || cfg.Verify.Checks[0].Name != "employee_id" {
+		t.Errorf("Verify.Checks = %v, want 1 custom check", cfg.Verify.Checks)
+	}
+	if len(cfg.Verify.Ignore) != 1 || cfg.Verify.Ignore[0] != "public.users.id" {
+		t.Errorf("Verify.Ignore = %v, want 1 ignore entry", cfg.Verify.Ignore)
+	}
+}
+
+func TestSamplePercentValidation(t *testing.T) {
+	if err := Load2(write(t, "slice:\n  sample_percent: -5\n")); err == nil {
+		t.Error("negative sample_percent accepted")
+	}
+	if err := Load2(write(t, "slice:\n  sample_percent: 150\n")); err == nil {
+		t.Error("sample_percent > 100 accepted")
+	}
+	cfg, err := Load(write(t, "slice:\n  sample_percent: 25.5\n"))
+	if err != nil {
+		t.Fatalf("valid sample_percent rejected: %v", err)
+	}
+	if cfg.Slice.SamplePercent != 25.5 {
+		t.Errorf("SamplePercent = %f, want 25.5", cfg.Slice.SamplePercent)
+	}
+}

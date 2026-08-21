@@ -91,6 +91,18 @@ func Checks() []Check {
 			SQL:     `%[1]s ~ '\m[0-9]{13,19}\M'`,
 			Confirm: containsLuhnValid,
 		},
+		{
+			Kind: "secret token",
+			// Checks for AWS keys, Stripe live keys, GitHub tokens, and JWT tokens
+			SQL: `%[1]s ~ '(AKIA[0-9A-Z]{16}|sk_live_[0-9a-zA-Z]{24}|ghp_[0-9a-zA-Z]{36}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
+			      AND %[1]s !~ 'REDACTED'`,
+		},
+		{
+			Kind: "national id",
+			// Checks for standard US SSN format (excluding known invalid prefixes 000, 666, 900-999)
+			SQL: `%[1]s ~ '(^|[^0-9])([0-8][0-9]{2}-[0-9]{2}-[0-9]{4})([^0-9]|$)'
+			      AND %[1]s !~ '(^|[^0-9])(000|666|9[0-9]{2})-'`,
+		},
 	}
 }
 
@@ -130,6 +142,12 @@ func luhn(s string) bool {
 	return sum%10 == 0
 }
 
+// CustomCheck defines a user-specified regex check.
+type CustomCheck struct {
+	Name    string
+	Pattern string
+}
+
 // Options controls the scan.
 type Options struct {
 	// Sample caps how many rows per column are pulled back for checks that need
@@ -137,6 +155,8 @@ type Options struct {
 	Sample int
 	// Extra columns to skip, as "table.column".
 	Ignore map[string]bool
+	// Custom user-defined checks to evaluate.
+	CustomChecks []CustomCheck
 }
 
 // Scan checks every text column of every table and returns what it found.
@@ -144,6 +164,21 @@ func Scan(ctx context.Context, conn *pgx.Conn, cat *catalog.Catalog, opt Options
 	if opt.Sample <= 0 {
 		opt.Sample = 1000
 	}
+	var allChecks []Check
+	allChecks = append(allChecks, Checks()...)
+	for _, cc := range opt.CustomChecks {
+		if cc.Pattern != "" {
+			name := cc.Name
+			if name == "" {
+				name = "custom"
+			}
+			allChecks = append(allChecks, Check{
+				Kind: name,
+				SQL:  fmt.Sprintf(`%%[1]s ~ '%s'`, strings.ReplaceAll(cc.Pattern, `'`, `''`)),
+			})
+		}
+	}
+
 	var findings []Finding
 	for _, ref := range cat.Refs() {
 		t, ok := cat.Table(ref)
@@ -154,7 +189,7 @@ func Scan(ctx context.Context, conn *pgx.Conn, cat *catalog.Catalog, opt Options
 			if !isTextual(col) || opt.Ignore[ref.Name+"."+col.Name] {
 				continue
 			}
-			for _, check := range Checks() {
+			for _, check := range allChecks {
 				f, err := runCheck(ctx, conn, ref, col.Name, check, opt.Sample)
 				if err != nil {
 					return nil, err

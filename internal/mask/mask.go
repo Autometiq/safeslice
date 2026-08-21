@@ -29,10 +29,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Autometiq/safeslice/internal/catalog"
 )
@@ -51,11 +53,15 @@ const (
 	FullName  Rule = "name"
 	Address   Rule = "address"
 	IP        Rule = "ip"
+	DateShift Rule = "date_shift" // shift date/timestamp by deterministic offset (+/- 30 days)
+	Date      Rule = "date"       // replace with a deterministic fake date
 )
 
-var known = map[Rule]bool{Keep: true, Redact: true, Secret: true, Email: true,
+var known = map[Rule]bool{
+	Keep: true, Redact: true, Secret: true, Email: true,
 	Phone: true, GovID: true, FirstName: true, LastName: true, FullName: true,
-	Address: true, IP: true}
+	Address: true, IP: true, DateShift: true, Date: true,
+}
 
 func ParseRule(s string) (Rule, error) {
 	r := Rule(s)
@@ -83,6 +89,8 @@ var defaultRules = []struct {
 	// pattern would otherwise fill an IP column with a street address.
 	{regexp.MustCompile(`(^|_)ip(_?addr(ess)?)?($|_)`), IP},
 	{regexp.MustCompile(`(^|_)(address|street|address_?line_?\d*|post_?code|zip_?code|postal_?code)($|_)`), Address},
+	// Birth dates and sensitive date indicators default to deterministic date shifting
+	{regexp.MustCompile(`(^|_)(dob|birth_?date|date_of_birth|birthday)($|_)`), DateShift},
 }
 
 // Classifier decides which rule applies to a column. Overrides are keyed either
@@ -153,6 +161,9 @@ const (
 	kindDecimal
 	kindUUID
 	kindInet
+	kindDate
+	kindTime
+	kindJSON
 	kindOther
 )
 
@@ -182,6 +193,12 @@ func kindOf(col catalog.Column) kind {
 		return kindUUID
 	case t == "inet", t == "cidr":
 		return kindInet
+	case t == "date":
+		return kindDate
+	case strings.Contains(t, "timestamp"), strings.Contains(t, "timestamptz"), strings.Contains(t, "time"):
+		return kindTime
+	case t == "json", t == "jsonb":
+		return kindJSON
 	default:
 		return kindOther
 	}
@@ -224,6 +241,9 @@ func (m Masker) Value(rule Rule, col catalog.Column, in *string, salt int) (*str
 	if rule == Redact {
 		if col.NotNull {
 			empty := ""
+			if kindOf(col) == kindJSON {
+				empty = "{}"
+			}
 			return &empty, nil
 		}
 		return nil, nil
@@ -233,9 +253,18 @@ func (m Masker) Value(rule Rule, col catalog.Column, in *string, salt int) (*str
 	hexs := hex.EncodeToString(sum)
 	n := binary.BigEndian.Uint64(sum[:8])
 
-	out, err := m.render(rule, col, hexs, n, salt)
+	out, err := m.render(rule, col, hexs, n, salt, in)
 	if err != nil {
 		return nil, err
+	}
+	if t, ok := out.(time.Time); ok {
+		var formatted string
+		if kindOf(col) == kindDate {
+			formatted = t.Format("2006-01-02")
+		} else {
+			formatted = t.Format(time.RFC3339)
+		}
+		return &formatted, nil
 	}
 	s := clamp(fmt.Sprintf("%v", out), col.MaxLen)
 	return &s, nil
@@ -255,10 +284,22 @@ func (m Masker) Apply(rule Rule, col catalog.Column, v any, salt int) (any, erro
 		if kindOf(col).numeric() {
 			return int64(0), nil
 		}
+		if kindOf(col) == kindDate || kindOf(col) == kindTime {
+			return time.Time{}, nil
+		}
+		if kindOf(col) == kindJSON {
+			return "{}", nil
+		}
 		return "", nil
 	}
-	sum := m.digest(fmt.Sprintf("%v", v), salt)
-	out, err := m.render(rule, col, hex.EncodeToString(sum), binary.BigEndian.Uint64(sum[:8]), salt)
+	var strVal string
+	if t, ok := v.(time.Time); ok {
+		strVal = t.Format(time.RFC3339Nano)
+	} else {
+		strVal = fmt.Sprintf("%v", v)
+	}
+	sum := m.digest(strVal, salt)
+	out, err := m.render(rule, col, hex.EncodeToString(sum), binary.BigEndian.Uint64(sum[:8]), salt, v)
 	if err != nil {
 		return nil, err
 	}
@@ -268,14 +309,173 @@ func (m Masker) Apply(rule Rule, col catalog.Column, v any, salt int) (any, erro
 	return out, nil
 }
 
+// dateLayouts are common ISO/SQL string layouts tested when shifting text-based dates.
+var dateLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999-07",
+	"2006-01-02 15:04:05.999999",
+	"2006-01-02 15:04:05-07",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// renderDateShift deterministically offsets a time.Time or date string by +/- 30 days.
+func (m Masker) renderDateShift(n uint64, salt int, origVal any) (any, error) {
+	// Deterministic offset between -30 and +30 days, adjusting if salt > 0
+	offsetDays := int(n%61) - 30
+	if salt > 0 {
+		offsetDays += salt
+	}
+
+	if t, ok := origVal.(time.Time); ok {
+		return t.AddDate(0, 0, offsetDays), nil
+	}
+	if strPtr, ok := origVal.(*string); ok && strPtr != nil {
+		return shiftDateString(*strPtr, offsetDays, n)
+	}
+	if str, ok := origVal.(string); ok {
+		return shiftDateString(str, offsetDays, n)
+	}
+	// Fallback to reference date if value type is unrecognized
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	return base.AddDate(0, 0, offsetDays), nil
+}
+
+func shiftDateString(s string, offsetDays int, n uint64) (string, error) {
+	for _, layout := range dateLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			shifted := t.AddDate(0, 0, offsetDays)
+			return shifted.Format(layout), nil
+		}
+	}
+	// Unparseable string fallback: return deterministic ISO date
+	year := int(2020 + (n % 6))
+	month := time.Month(1 + (n % 12))
+	day := int(1 + (n % 28))
+	return fmt.Sprintf("%04d-%02d-%02d", year, month, day), nil
+}
+
+// renderJSON parses structured JSON / JSONB and deeply masks sensitive nested keys.
+func (m Masker) renderJSON(origVal any, salt int) (any, error) {
+	if origVal == nil {
+		return nil, nil
+	}
+	var raw []byte
+	isBytes := false
+	switch v := origVal.(type) {
+	case []byte:
+		raw = v
+		isBytes = true
+	case string:
+		raw = []byte(v)
+	case *string:
+		if v == nil {
+			return nil, nil
+		}
+		raw = []byte(*v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "{}", nil
+		}
+		raw = b
+	}
+
+	if len(raw) == 0 {
+		if isBytes {
+			return []byte("{}"), nil
+		}
+		return "{}", nil
+	}
+
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		// Fallback for non-JSON content
+		if isBytes {
+			return []byte("{}"), nil
+		}
+		return "{}", nil
+	}
+
+	masked := m.maskJSONNode(parsed, salt)
+	out, err := json.Marshal(masked)
+	if err != nil {
+		if isBytes {
+			return []byte("{}"), nil
+		}
+		return "{}", nil
+	}
+	if isBytes {
+		return out, nil
+	}
+	return string(out), nil
+}
+
+func (m Masker) maskJSONNode(node any, salt int) any {
+	switch v := node.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(v))
+		for k, val := range v {
+			rule := ruleForJSONKey(k)
+			if rule != Keep && val != nil {
+				if s, ok := val.(string); ok {
+					maskedVal, err := m.Value(rule, catalog.Column{Name: k, Type: "text", MaxLen: -1}, &s, salt)
+					if err == nil && maskedVal != nil {
+						result[k] = *maskedVal
+						continue
+					}
+				}
+			}
+			result[k] = m.maskJSONNode(val, salt)
+		}
+		return result
+	case []any:
+		result := make([]any, len(v))
+		for i, elem := range v {
+			result[i] = m.maskJSONNode(elem, salt)
+		}
+		return result
+	default:
+		return node
+	}
+}
+
+func ruleForJSONKey(key string) Rule {
+	low := strings.ToLower(key)
+	for _, d := range defaultRules {
+		if d.re.MatchString(low) {
+			return d.rule
+		}
+	}
+	return Keep
+}
+
 // render produces the replacement in the Go type matching the column.
-func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, salt int) (any, error) {
+func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, salt int, origVal any) (any, error) {
 	switch k := kindOf(col); k {
 	case kindOther:
 		// Writing a fake string into a geometry, array or enum column would
 		// corrupt the row. Refusing is the only safe answer.
 		return nil, fmt.Errorf("column %s has type %s, which safeslice cannot mask safely; "+
 			"set it to `keep` or `redact` in config", col.Name, col.Type)
+	case kindJSON:
+		if rule == Redact {
+			if col.NotNull {
+				return "{}", nil
+			}
+			return nil, nil
+		}
+		if rule == Secret {
+			return "{}", nil
+		}
+		return m.renderJSON(origVal, salt)
+	case kindDate, kindTime:
+		if rule == DateShift || rule == Date {
+			return m.renderDateShift(n, salt, origVal)
+		}
+		// If another rule (e.g. Secret) was applied to a date column, shift it safely
+		return m.renderDateShift(n, salt, origVal)
 	case kindInt:
 		// A phone or account number held as an integer still needs masking, but
 		// it has to stay an integer.
@@ -292,6 +492,9 @@ func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, sal
 	case kindInet:
 		return fmt.Sprintf("203.0.113.%d", n%254+1), nil // RFC 5737 TEST-NET-3
 	default:
+		if rule == DateShift || rule == Date {
+			return m.renderDateShift(n, salt, origVal)
+		}
 		return m.text(rule, hexs, n, salt), nil
 	}
 }
@@ -394,12 +597,7 @@ func SatisfiesUnique(rule Rule, col catalog.Column) error {
 	return nil
 }
 
-// UniqueColumns returns the single-column unique constraints on a table. Only
-// single-column constraints are handled: a composite unique constraint stays
-// satisfied as long as at least one of its columns is untouched, and columns
-// that are all masked would need joint generation, which is not supported yet.
-//
-// ponytail: single-column only; add joint generation if a real schema needs it.
+// UniqueColumns returns the single-column unique constraints on a table.
 func UniqueColumns(t *catalog.Table) map[string]bool {
 	out := map[string]bool{}
 	for _, set := range t.Uniques {
@@ -411,4 +609,49 @@ func UniqueColumns(t *catalog.Table) map[string]bool {
 		out[t.PK[0]] = true
 	}
 	return out
+}
+
+// CompositeUniques returns the multi-column (composite) unique constraints on a table.
+func CompositeUniques(t *catalog.Table) [][]string {
+	var out [][]string
+	for _, set := range t.Uniques {
+		if len(set) > 1 {
+			out = append(out, set)
+		}
+	}
+	if len(t.PK) > 1 {
+		out = append(out, t.PK)
+	}
+	return out
+}
+
+// CompositeUniqueSet tracks composite tuples emitted for multi-column unique constraints
+// and ensures joint values never collide under unique constraints.
+type CompositeUniqueSet struct {
+	seen map[string]bool
+}
+
+func NewCompositeUniqueSet() *CompositeUniqueSet {
+	return &CompositeUniqueSet{seen: map[string]bool{}}
+}
+
+// Ensure calls gen with increasing salts until the composite tuple has not been used.
+func (u *CompositeUniqueSet) Ensure(gen func(salt int) ([]string, error)) ([]string, error) {
+	var prevKey string
+	for salt := range 1000 {
+		tuple, err := gen(salt)
+		if err != nil {
+			return nil, err
+		}
+		key := strings.Join(tuple, "\x00")
+		if !u.seen[key] {
+			u.seen[key] = true
+			return tuple, nil
+		}
+		if prevKey != "" && prevKey == key {
+			return nil, errSaltInvariant
+		}
+		prevKey = key
+	}
+	return nil, fmt.Errorf("could not generate a unique composite masked tuple after 1000 attempts")
 }

@@ -38,6 +38,9 @@ type Config struct {
 	Slice   Slice  `yaml:"slice"`
 	Mask    Mask   `yaml:"mask"`
 
+	// Verify specifies custom post-slice leak detection checks and column ignores.
+	Verify Verify `yaml:"verify"`
+
 	// VirtualKeys declare relationships Postgres does not enforce. Rails
 	// polymorphic associations and Django generic relations have no
 	// pg_constraint row, so without these the graph cannot see them and the
@@ -45,15 +48,26 @@ type Config struct {
 	VirtualKeys []VirtualKey `yaml:"virtual_keys"`
 }
 
+type Verify struct {
+	Checks []CustomCheck `yaml:"checks"`
+	Ignore []string      `yaml:"ignore"`
+}
+
+type CustomCheck struct {
+	Name    string `yaml:"name"`
+	Pattern string `yaml:"pattern"`
+}
+
 type Source struct {
 	Schemas []string `yaml:"schemas"`
 }
 
 type Slice struct {
-	Root       string `yaml:"root"`
-	Where      string `yaml:"where"`
-	Limit      int    `yaml:"limit"`
-	ChildDepth int    `yaml:"child_depth"`
+	Root          string  `yaml:"root"`
+	Where         string  `yaml:"where"`
+	Limit         int     `yaml:"limit"`
+	SamplePercent float64 `yaml:"sample_percent"`
+	ChildDepth    int     `yaml:"child_depth"`
 }
 
 type Mask struct {
@@ -139,6 +153,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Slice.ChildDepth < 0 {
 		return fmt.Errorf("slice.child_depth must not be negative")
+	}
+	if c.Slice.SamplePercent < 0 || c.Slice.SamplePercent > 100 {
+		return fmt.Errorf("slice.sample_percent must be between 0 and 100")
 	}
 	for key, rule := range c.Mask.Rules {
 		if _, err := mask.ParseRule(rule); err != nil {
