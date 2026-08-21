@@ -15,8 +15,10 @@
 package mask
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Autometiq/safeslice/internal/catalog"
 )
@@ -327,5 +329,125 @@ func TestUniqueSetGivesUpOnASaltInvariantRule(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "secret") {
 		t.Errorf("error does not say what to do instead: %v", err)
+	}
+}
+
+func TestDateShift(t *testing.T) {
+	m := Masker{Seed: "team-seed"}
+	c := col("birth_date", "date")
+
+	inDate := "1990-05-15"
+	out1 := mustValue(t, m, DateShift, c, s(inDate))
+	out2 := mustValue(t, m, DateShift, c, s(inDate))
+
+	if *out1 != *out2 {
+		t.Errorf("DateShift is non-deterministic: got %q and %q", *out1, *out2)
+	}
+	if *out1 == inDate {
+		t.Errorf("DateShift did not change the input date: %q", *out1)
+	}
+
+	// Apply with actual time.Time
+	parsedTime, _ := time.Parse("2006-01-02", inDate)
+	applied, err := m.Apply(DateShift, c, parsedTime, 0)
+	if err != nil {
+		t.Fatalf("Apply(DateShift): %v", err)
+	}
+	shiftedTime, ok := applied.(time.Time)
+	if !ok {
+		t.Fatalf("Apply(DateShift) expected time.Time, got %T", applied)
+	}
+	if shiftedTime.Equal(parsedTime) {
+		t.Errorf("shifted time equals original time: %v", shiftedTime)
+	}
+}
+
+func TestDateRule(t *testing.T) {
+	m := Masker{Seed: "team-seed"}
+	c := col("event_date", "date")
+
+	out := mustValue(t, m, Date, c, s("2023-01-01"))
+	if *out == "" {
+		t.Error("Date rule produced an empty string")
+	}
+}
+
+func TestDateDefaultClassification(t *testing.T) {
+	cl := Classifier{}
+	r := catalog.Ref{Schema: "public", Name: "users"}
+	if got := cl.Rule(r, "date_of_birth"); got != DateShift {
+		t.Errorf("date_of_birth rule = %v, want %v", got, DateShift)
+	}
+	if got := cl.Rule(r, "dob"); got != DateShift {
+		t.Errorf("dob rule = %v, want %v", got, DateShift)
+	}
+	if got := cl.Rule(r, "birthday"); got != DateShift {
+		t.Errorf("birthday rule = %v, want %v", got, DateShift)
+	}
+}
+
+func TestJSONDeepMasking(t *testing.T) {
+	m := Masker{Seed: "team-seed"}
+	c := col("metadata", "jsonb")
+
+	inJSON := `{"customer":{"email":"real@customer.com","name":"Real Customer"},"tags":["vip","active"],"count":42}`
+	out1 := mustValue(t, m, Keep, c, s(inJSON))
+	if *out1 != inJSON {
+		t.Errorf("Keep rule modified JSON: %v", *out1)
+	}
+
+	// Default masking rule on JSON column
+	masked := mustValue(t, m, Rule(""), c, s(inJSON))
+	if strings.Contains(*masked, "real@customer.com") {
+		t.Errorf("nested email leaked in JSON payload: %s", *masked)
+	}
+	if strings.Contains(*masked, "Real Customer") {
+		t.Errorf("nested name leaked in JSON payload: %s", *masked)
+	}
+	if !strings.Contains(*masked, "vip") || !strings.Contains(*masked, "42") {
+		t.Errorf("non-sensitive structure corrupted: %s", *masked)
+	}
+
+	// Redact rule
+	redacted := mustValue(t, m, Redact, c, s(inJSON))
+	if redacted != nil {
+		t.Errorf("Redact on nullable jsonb want nil, got %v", *redacted)
+	}
+
+	// Redact on NOT NULL
+	cNotNull := col("metadata", "jsonb", notNull)
+	redactedNotNull := mustValue(t, m, Redact, cNotNull, s(inJSON))
+	if *redactedNotNull != "{}" {
+		t.Errorf("Redact on NOT NULL jsonb want '{}', got %v", *redactedNotNull)
+	}
+}
+
+func TestCompositeUniquesAndSet(t *testing.T) {
+	tbl := &catalog.Table{
+		Ref:     users,
+		PK:      []string{"id"},
+		Uniques: [][]string{{"email"}, {"tenant_id", "slug"}, {"org_id", "project_id", "key"}},
+	}
+	comp := CompositeUniques(tbl)
+	if len(comp) != 2 {
+		t.Fatalf("CompositeUniques len = %d, want 2", len(comp))
+	}
+
+	cus := NewCompositeUniqueSet()
+	tupleGen := func(salt int) ([]string, error) {
+		if salt == 0 {
+			return []string{"org_1", "slug_a"}, nil
+		}
+		return []string{"org_1", fmt.Sprintf("slug_a_%d", salt)}, nil
+	}
+
+	first, err := cus.Ensure(tupleGen)
+	if err != nil || first[1] != "slug_a" {
+		t.Fatalf("first tuple error: %v, got %v", err, first)
+	}
+
+	second, err := cus.Ensure(tupleGen)
+	if err != nil || second[1] != "slug_a_1" {
+		t.Fatalf("second tuple error: %v, got %v", err, second)
 	}
 }
