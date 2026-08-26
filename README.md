@@ -57,11 +57,13 @@ curl -sSfL "https://github.com/Autometiq/safeslice/releases/latest/download/safe
 sudo mv safeslice /usr/local/bin/
 ```
 
-**Windows** — PowerShell:
-```powershell
-Invoke-WebRequest https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_windows_amd64.zip -OutFile safeslice.zip
-Expand-Archive safeslice.zip -DestinationPath $env:LOCALAPPDATA\Programs\safeslice -Force
-$env:PATH += ";$env:LOCALAPPDATA\Programs\safeslice"
+**Windows** — Command Prompt (cmd):
+```cmd
+curl -sSfL -o safeslice.zip https://github.com/Autometiq/safeslice/releases/latest/download/safeslice_windows_amd64.zip
+tar -xf safeslice.zip
+mkdir "%LOCALAPPDATA%\Programs\safeslice" 2>nul
+move safeslice.exe "%LOCALAPPDATA%\Programs\safeslice\"
+setx PATH "%PATH%;%LOCALAPPDATA%\Programs\safeslice"
 ```
 
 <details>
