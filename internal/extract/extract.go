@@ -402,8 +402,7 @@ func (e *Extractor) streamTable(ctx context.Context, sink Sink, ref catalog.Ref,
 		return 0, err
 	}
 	defer w.Close(ctx)
-
-	m := mask.Masker{Seed: e.opt.Seed}
+	m := mask.Masker{Seed: e.opt.Seed, Classifier: e.opt.Classifier, Table: ref}
 	keyCols := e.cat.KeyColumns(ref)
 	uniqueCols := mask.UniqueColumns(t)
 	uniques := map[string]*mask.UniqueSet{}
