@@ -55,12 +55,13 @@ const (
 	IP        Rule = "ip"
 	DateShift Rule = "date_shift" // shift date/timestamp by deterministic offset (+/- 30 days)
 	Date      Rule = "date"       // replace with a deterministic fake date
+	ScrubText Rule = "scrub_text" // search and replace PII inside free text
 )
 
 var known = map[Rule]bool{
 	Keep: true, Redact: true, Secret: true, Email: true,
 	Phone: true, GovID: true, FirstName: true, LastName: true, FullName: true,
-	Address: true, IP: true, DateShift: true, Date: true,
+	Address: true, IP: true, DateShift: true, Date: true, ScrubText: true,
 }
 
 func ParseRule(s string) (Rule, error) {
@@ -213,7 +214,9 @@ var (
 // Masker generates replacement values. Seed is what makes a run reproducible;
 // sharing the seed across a team makes everyone's snapshots line up.
 type Masker struct {
-	Seed string
+	Seed       string
+	Classifier Classifier
+	Table      catalog.Ref
 }
 
 func (m Masker) digest(value string, salt int) []byte {
@@ -357,7 +360,7 @@ func shiftDateString(s string, offsetDays int, n uint64) (string, error) {
 }
 
 // renderJSON parses structured JSON / JSONB and deeply masks sensitive nested keys.
-func (m Masker) renderJSON(origVal any, salt int) (any, error) {
+func (m Masker) renderJSON(origVal any, salt int, col catalog.Column) (any, error) {
 	if origVal == nil {
 		return nil, nil
 	}
@@ -398,7 +401,7 @@ func (m Masker) renderJSON(origVal any, salt int) (any, error) {
 		return "{}", nil
 	}
 
-	masked := m.maskJSONNode(parsed, salt)
+	masked := m.maskJSONNode(parsed, salt, col.Name)
 	out, err := json.Marshal(masked)
 	if err != nil {
 		if isBytes {
@@ -412,12 +415,20 @@ func (m Masker) renderJSON(origVal any, salt int) (any, error) {
 	return string(out), nil
 }
 
-func (m Masker) maskJSONNode(node any, salt int) any {
+func (m Masker) maskJSONNode(node any, salt int, path string) any {
 	switch v := node.(type) {
 	case map[string]any:
 		result := make(map[string]any, len(v))
 		for k, val := range v {
-			rule := ruleForJSONKey(k)
+			currentPath := path + "." + k
+
+			// 1. Check dot-notation overrides in Classifier (e.g. "payload.user.email")
+			rule := m.Classifier.Rule(m.Table, currentPath)
+			if rule == Keep {
+				// 2. Fallback to default regex matching on the key itself (e.g. "email")
+				rule = ruleForJSONKey(k)
+			}
+
 			if rule != Keep && val != nil {
 				if s, ok := val.(string); ok {
 					maskedVal, err := m.Value(rule, catalog.Column{Name: k, Type: "text", MaxLen: -1}, &s, salt)
@@ -427,13 +438,13 @@ func (m Masker) maskJSONNode(node any, salt int) any {
 					}
 				}
 			}
-			result[k] = m.maskJSONNode(val, salt)
+			result[k] = m.maskJSONNode(val, salt, currentPath)
 		}
 		return result
 	case []any:
 		result := make([]any, len(v))
 		for i, elem := range v {
-			result[i] = m.maskJSONNode(elem, salt)
+			result[i] = m.maskJSONNode(elem, salt, path)
 		}
 		return result
 	default:
@@ -469,7 +480,7 @@ func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, sal
 		if rule == Secret {
 			return "{}", nil
 		}
-		return m.renderJSON(origVal, salt)
+		return m.renderJSON(origVal, salt, col)
 	case kindDate, kindTime:
 		if rule == DateShift || rule == Date {
 			return m.renderDateShift(n, salt, origVal)
@@ -495,8 +506,43 @@ func (m Masker) render(rule Rule, col catalog.Column, hexs string, n uint64, sal
 		if rule == DateShift || rule == Date {
 			return m.renderDateShift(n, salt, origVal)
 		}
+		if rule == ScrubText {
+			return m.renderScrubText(n, salt, origVal)
+		}
 		return m.text(rule, hexs, n, salt), nil
 	}
+}
+
+var scrubEmailRe = regexp.MustCompile(`(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}`)
+var scrubPhoneRe = regexp.MustCompile(`(?i)(?:\+|00)[0-9][0-9 ().-]{5,16}[0-9]`)
+
+func (m Masker) renderScrubText(n uint64, salt int, origVal any) (any, error) {
+	if origVal == nil {
+		return nil, nil
+	}
+	var s string
+	if ptr, ok := origVal.(*string); ok {
+		if ptr == nil {
+			return nil, nil
+		}
+		s = *ptr
+	} else {
+		s = fmt.Sprintf("%v", origVal)
+	}
+
+	s = scrubEmailRe.ReplaceAllStringFunc(s, func(match string) string {
+		sum := m.digest(match, salt)
+		hexs := hex.EncodeToString(sum)
+		return m.text(Email, hexs, binary.BigEndian.Uint64(sum[:8]), salt)
+	})
+
+	s = scrubPhoneRe.ReplaceAllStringFunc(s, func(match string) string {
+		sum := m.digest(match, salt)
+		hexs := hex.EncodeToString(sum)
+		return m.text(Phone, hexs, binary.BigEndian.Uint64(sum[:8]), salt)
+	})
+
+	return s, nil
 }
 
 func (m Masker) text(rule Rule, hexs string, n uint64, salt int) string {

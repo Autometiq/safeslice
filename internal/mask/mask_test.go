@@ -451,3 +451,46 @@ func TestCompositeUniquesAndSet(t *testing.T) {
 		t.Fatalf("second tuple error: %v, got %v", err, second)
 	}
 }
+
+func TestScrubText(t *testing.T) {
+	m := Masker{Seed: "team-seed"}
+	c := col("comments", "text")
+
+	inText := "User john.doe@real.com called about order from +1-800-555-0199."
+	out := mustValue(t, m, ScrubText, c, s(inText))
+
+	if strings.Contains(*out, "john.doe@real.com") {
+		t.Errorf("ScrubText leaked email: %s", *out)
+	}
+	if strings.Contains(*out, "+1-800-555-0199") {
+		t.Errorf("ScrubText leaked phone: %s", *out)
+	}
+	if !strings.Contains(*out, "User ") || !strings.Contains(*out, " called about order from ") {
+		t.Errorf("ScrubText corrupted non-PII text: %s", *out)
+	}
+
+	// Ensure it replaced with fakes
+	if !strings.Contains(*out, "@example.invalid") {
+		t.Errorf("ScrubText did not insert fake email: %s", *out)
+	}
+}
+
+func TestDeepJSONPathMasking(t *testing.T) {
+	cl := Classifier{
+		Overrides: map[string]Rule{
+			"public.events.payload.user.contact.phone": Phone,
+		},
+	}
+	m := Masker{Seed: "team-seed", Classifier: cl, Table: catalog.Ref{Schema: "public", Name: "events"}}
+	c := col("payload", "jsonb")
+
+	inJSON := `{"user":{"contact":{"phone":"+447700900123","public_handle":"@realuser"}}}`
+	out := mustValue(t, m, Rule(""), c, s(inJSON))
+
+	if strings.Contains(*out, "+447700900123") {
+		t.Errorf("JSON path dot-notation leaked phone: %s", *out)
+	}
+	if !strings.Contains(*out, "@realuser") {
+		t.Errorf("JSON path dot-notation destroyed unmasked key: %s", *out)
+	}
+}
